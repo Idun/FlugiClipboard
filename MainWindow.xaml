@@ -1,0 +1,335 @@
+<Window x:Class="FlugiClipboard.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="剪贴板" Height="600" Width="480"
+        WindowStartupLocation="Manual"
+        ResizeMode="CanResize"
+        Background="#F3F3F3"
+        Topmost="True"
+        ShowInTaskbar="False"
+        WindowState="Normal"
+        WindowStyle="None"
+        AllowsTransparency="False"
+        MinWidth="100"
+        MinHeight="80">
+
+    <Window.Resources>
+        <!-- 圆形窗口控制按钮样式 -->
+        <Style x:Key="CircleButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="16"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Margin" Value="4,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Ellipse Fill="{TemplateBinding Background}"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 自定义滚动条样式 -->
+        <Style x:Key="CustomScrollBarStyle" TargetType="ScrollBar">
+            <Setter Property="Width" Value="3"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid>
+                            <Border Background="Transparent"/>
+                            <Track Name="PART_Track" IsDirectionReversed="True">
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="#99999999"
+                                                        CornerRadius="1.5"
+                                                        Margin="0.5"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 卡片样式 -->
+        <Style x:Key="ClipboardCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#E1E1E1"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Margin" Value="8,4"/>
+            <Setter Property="Padding" Value="12"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect Color="Black" Opacity="0.1"
+                                      ShadowDepth="2" BlurRadius="4"/>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#F8F8F8"/>
+                    <Setter Property="BorderBrush" Value="#0078D4"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <!-- 窗口边框 - 直角设计，确保标题栏完美贴合 -->
+    <Border Background="White" BorderBrush="#E1E1E1" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- 自定义标题栏 -->
+            <Border Grid.Row="0" Background="White"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid Height="32">
+                    <!-- 窗口标题 -->
+                    <TextBlock Text="剪贴板" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               FontSize="14" Foreground="#323130" FontWeight="Medium"/>
+
+                    <!-- 窗口控制按钮 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                VerticalAlignment="Center" Margin="0,0,12,0">
+                        <Button Name="MinimizeButton" Style="{StaticResource CircleButtonStyle}"
+                                Background="#FFBD2E" Click="MinimizeButton_Click" ToolTip="最小化"/>
+                        <Button Name="MaximizeButton" Style="{StaticResource CircleButtonStyle}"
+                                Background="#27CA3F" Click="MaximizeButton_Click" ToolTip="最大化"/>
+                        <Button Name="CloseButton" Style="{StaticResource CircleButtonStyle}"
+                                Background="#FF5F56" Click="CloseButton_Click" ToolTip="关闭"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 功能按钮栏 -->
+            <Border Grid.Row="1" Background="White" Padding="16,12"
+                    BorderBrush="#E1E1E1" BorderThickness="0,0,0,1">
+                <Grid>
+                    <!-- 左侧图标 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                        <Button Name="FolderButton" Content="📁"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                FontSize="14"
+                                Padding="8,4"
+                                Margin="0,0,8,0"
+                                Click="FolderButton_Click"
+                                ToolTip="打开程序目录"/>
+                    </StackPanel>
+
+                    <!-- 右侧图标 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Name="SettingsButton" Content="⚙️"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                FontSize="14"
+                                Padding="8,4"
+                                Margin="0,0,8,0"
+                                Click="SettingsButton_Click"
+                                ToolTip="设置"/>
+                        <Button Name="PinButton" Content="📌"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                FontSize="14"
+                                Padding="8,4"
+                                Click="PinButton_Click"
+                                ToolTip="置顶"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 主内容区域 -->
+            <ScrollViewer Grid.Row="2"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Background="Transparent">
+            <ScrollViewer.Resources>
+                <Style TargetType="ScrollBar" BasedOn="{StaticResource CustomScrollBarStyle}"/>
+            </ScrollViewer.Resources>
+
+            <ListBox Name="ClipboardItemsControl"
+                     Background="Transparent"
+                     Margin="0,8"
+                     BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                     VirtualizingPanel.IsVirtualizing="True"
+                     VirtualizingPanel.VirtualizationMode="Recycling"
+                     VirtualizingPanel.ScrollUnit="Pixel">
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <VirtualizingStackPanel/>
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        <Setter Property="Padding" Value="0"/>
+                        <Setter Property="Margin" Value="0"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="Background" Value="Transparent"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter/>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Border Style="{StaticResource ClipboardCardStyle}"
+                                MouseLeftButtonDown="ClipboardItem_MouseLeftButtonDown">
+                            <Border.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="拆分选词" Click="SplitWords_Click"/>
+                                    <MenuItem Header="{Binding PinMenuText}" Click="TogglePin_Click"/>
+                                    <MenuItem Header="删除" Click="DeleteText_Click"/>
+                                    <Separator/>
+                                    <MenuItem Header="清空全部" Click="ClearAll_Click"/>
+                                </ContextMenu>
+                            </Border.ContextMenu>
+
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- 内容预览 -->
+                                <Grid Grid.Row="0">
+                                    <!-- 文本内容 -->
+                                    <TextBlock Text="{Binding CardPreview}"
+                                               FontSize="13"
+                                               Foreground="#323130"
+                                               TextWrapping="Wrap"
+                                               LineHeight="18"
+                                               MaxHeight="{Binding MaxPreviewHeight}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsImage}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+
+                                    <!-- 图片内容 -->
+                                    <StackPanel>
+                                        <StackPanel.Style>
+                                            <Style TargetType="StackPanel">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsImage}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </StackPanel.Style>
+                                        <Image Source="{Binding Image}"
+                                               MaxWidth="200"
+                                               MaxHeight="150"
+                                               Stretch="Uniform"
+                                               HorizontalAlignment="Left"
+                                               RenderOptions.BitmapScalingMode="LowQuality"/>
+                                        <TextBlock Text="[图片]"
+                                                   FontSize="13"
+                                                   Foreground="#605E5C"
+                                                   Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- 展开/折叠按钮 -->
+                                <Button Grid.Row="1"
+                                        Name="ExpandButton"
+                                        Content="{Binding ExpandButtonText}"
+                                        Visibility="{Binding ShowExpandButton}"
+                                        HorizontalAlignment="Left"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Foreground="#0078D4"
+                                        FontSize="12"
+                                        Margin="0,4,0,0"
+                                        Padding="0"
+                                        Click="ExpandButton_Click"/>
+
+                                <!-- 时间戳和操作按钮 -->
+                                <Grid Grid.Row="2" Margin="0,8,0,0">
+                                    <TextBlock Text="{Binding TimeDisplay}"
+                                               FontSize="11"
+                                               Foreground="#605E5C"
+                                               VerticalAlignment="Center"/>
+
+                                    <StackPanel Orientation="Horizontal"
+                                                HorizontalAlignment="Right">
+                                        <Button Content="{Binding PinIcon}"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                FontSize="12"
+                                                Padding="6,4"
+                                                Margin="2,0"
+                                                ToolTip="{Binding PinTooltip}"
+                                                Click="TogglePin_Click"/>
+                                        <Button Content="✂️"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                FontSize="12"
+                                                Padding="6,4"
+                                                Margin="2,0"
+                                                ToolTip="拆分选词"
+                                                Click="SplitWords_Click">
+                                            <Button.Style>
+                                                <Style TargetType="Button">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsImage}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                        </Button>
+                                        <Button Content="🗑️"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                FontSize="12"
+                                                Padding="6,4"
+                                                Margin="2,0"
+                                                ToolTip="删除"
+                                                Click="DeleteText_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </ScrollViewer>
+
+            <!-- 底部提示 - 直角设计 -->
+            <Border Grid.Row="3" Background="White" Padding="16,8"
+                    BorderBrush="#E1E1E1" BorderThickness="0,1,0,0">
+                <TextBlock Name="StatusTextBlock"
+                           Text="热键：Ctrl+Alt+C 呼出 | Ctrl+Q 文字交换 | Ctrl+T AI翻译 | 右键：拆分选词/删除"
+                           FontSize="11"
+                           Foreground="#605E5C"
+                           HorizontalAlignment="Center"/>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
