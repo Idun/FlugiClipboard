@@ -12,7 +12,7 @@
 
 ---
 
-![image](image/01-13.png)
+![image](image/image1.png)
 
 ---
 
@@ -24,7 +24,7 @@
 
 ---
 
-![image](image/02-33.png)
+![image](image/image2.png)
 
 ---
 
