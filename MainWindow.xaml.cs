@@ -32,7 +32,7 @@ namespace FlugiClipboard
         private IntPtr _previousForegroundWindow = IntPtr.Zero;
         private bool _singleClickPaste = false;
         private bool _doubleClickPaste = true;
-        private int _maxItems = 8; // 进一步减少默认最大项目数以节省内存
+        private int _maxItems = 20; // 默认最大项目数，将从设置文件中加载
         private uint _hotkeyModifiers = MOD_CONTROL | MOD_ALT;
         private uint _hotkeyKey = VK_C;
         private bool _saveHistoryEnabled = false;
@@ -64,6 +64,20 @@ namespace FlugiClipboard
         // 内存优化相关
         private System.Timers.Timer? _memoryCleanupTimer;
         private WeakReference<JiebaSegmenter>? _segmenterRef;
+
+        // 时间显示更新相关
+        private System.Timers.Timer? _timeUpdateTimer;
+
+        // 滚轮优化相关 - 高性能滚动参数
+        private DateTime _lastScrollTime = DateTime.MinValue;
+        private double _scrollVelocity = 0.0;
+        private ScrollViewer? _cachedScrollViewer; // 缓存ScrollViewer引用，避免重复查找
+        private const double SCROLL_VELOCITY_DECAY = 0.88; // 滚动速度衰减系数（降低以提供更好的加速感）
+        private const int SCROLL_ACCELERATION_THRESHOLD_MS = 80; // 滚动加速阈值（降低以更敏感地检测连续滚动）
+        private const double BASE_SCROLL_MULTIPLIER = 12.0; // 基础滚动倍数（从8.0提升到12.0）
+        private const double MAX_SCROLL_VELOCITY = 2500; // 最大滚动速度（提高上限）
+        private const double FAST_SCROLL_THRESHOLD = 200; // 快速滚动检测阈值（降低以更容易触发）
+        private const double FAST_SCROLL_BOOST = 2.2; // 快速滚动加速倍数（从1.8提升到2.2）
 
         // 历史保存相关常量
         private const int MAX_HISTORY_FILES = 500; // 减少文件数量限制
@@ -193,6 +207,9 @@ namespace FlugiClipboard
             // 添加窗口大小变化事件监听
             SizeChanged += MainWindow_SizeChanged;
 
+            // 添加鼠标滚轮事件处理，确保在整个窗口区域都能滚动
+            PreviewMouseWheel += MainWindow_PreviewMouseWheel;
+
             // 初始化系统托盘
             try
             {
@@ -216,6 +233,16 @@ namespace FlugiClipboard
                 // 继续运行，即使内存清理初始化失败
             }
 
+            // 初始化时间更新定时器
+            try
+            {
+                InitializeTimeUpdateTimer();
+            }
+            catch
+            {
+                // 继续运行，即使时间更新定时器初始化失败
+            }
+
             // 确保窗口初始状态正确
             WindowState = WindowState.Normal;
             Topmost = true;
@@ -228,10 +255,40 @@ namespace FlugiClipboard
             // 设置低优先级以减少系统资源占用
             MemoryOptimizer.SetLowPriority();
 
-            _memoryCleanupTimer = new System.Timers.Timer(TimeSpan.FromMinutes(3).TotalMilliseconds); // 每3分钟清理一次
+            // 增加清理间隔，减少对用户体验的影响
+            // 现在主要用于系统级内存优化，而不是删除用户数据
+            _memoryCleanupTimer = new System.Timers.Timer(TimeSpan.FromMinutes(10).TotalMilliseconds); // 每10分钟清理一次
             _memoryCleanupTimer.Elapsed += (s, e) => PerformMemoryCleanup();
             _memoryCleanupTimer.AutoReset = true;
             _memoryCleanupTimer.Start();
+        }
+
+        private void InitializeTimeUpdateTimer()
+        {
+            // 创建时间更新定时器，每30秒更新一次时间显示
+            _timeUpdateTimer = new System.Timers.Timer(TimeSpan.FromSeconds(30).TotalMilliseconds);
+            _timeUpdateTimer.Elapsed += (s, e) => UpdateTimeDisplays();
+            _timeUpdateTimer.AutoReset = true;
+            _timeUpdateTimer.Start();
+        }
+
+        private void UpdateTimeDisplays()
+        {
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    // 通知所有剪贴板项目更新时间显示
+                    foreach (var item in _clipboardHistory)
+                    {
+                        item.RefreshTimeDisplay();
+                    }
+                });
+            }
+            catch
+            {
+                // 忽略时间更新失败
+            }
         }
 
         private void PerformMemoryCleanup()
@@ -240,51 +297,30 @@ namespace FlugiClipboard
             {
                 Dispatcher.Invoke(() =>
                 {
-                    // 更激进的清理策略以节省内存
-                    var cutoffTime = DateTime.Now.AddMinutes(-20); // 减少到20分钟
-                    var itemsToRemove = _clipboardHistory
-                        .Where(item => !item.IsPinned && item.Timestamp < cutoffTime)
-                        .ToList();
-
-                    // 批量删除以提高性能
-                    foreach (var item in itemsToRemove)
-                    {
-                        _clipboardHistory.Remove(item);
-                    }
-
-                    // 如果内存使用过高，进行更激进的清理
-                    if (MemoryOptimizer.IsMemoryUsageHigh(40)) // 降低阈值
-                    {
-                        // 清理更多旧项目，只保留最近3个
-                        var recentCutoff = DateTime.Now.AddMinutes(-5);
-                        var moreItemsToRemove = _clipboardHistory
-                            .Where(item => !item.IsPinned && item.Timestamp < recentCutoff)
-                            .Skip(3) // 只保留最近3个
-                            .ToList();
-
-                        foreach (var item in moreItemsToRemove)
-                        {
-                            _clipboardHistory.Remove(item);
-                        }
-                    }
-
-                    // 强制限制最大项目数
+                    // 只保留基于数量限制的清理，移除基于时间的自动删除
+                    // 确保剪贴板历史不超过设置的最大项目数
                     if (_clipboardHistory.Count > _maxItems)
                     {
-                        var excessItems = _clipboardHistory
+                        // 计算需要删除的项目数量
+                        int itemsToRemoveCount = _clipboardHistory.Count - _maxItems;
+
+                        // 从最旧的非固定项目开始删除，实现FIFO机制
+                        var itemsToRemove = _clipboardHistory
                             .Where(item => !item.IsPinned)
-                            .Skip(_maxItems)
+                            .OrderBy(item => item.Timestamp) // 按时间排序，最旧的在前
+                            .Take(itemsToRemoveCount)
                             .ToList();
 
-                        foreach (var item in excessItems)
+                        // 批量删除
+                        foreach (var item in itemsToRemove)
                         {
                             _clipboardHistory.Remove(item);
                         }
                     }
                 });
 
-                // 使用优化器进行内存清理，降低阈值
-                MemoryOptimizer.MonitorAndCleanup(30);
+                // 执行系统级内存清理，但不删除用户数据
+                MemoryOptimizer.MonitorAndCleanup(80); // 提高阈值，减少过度清理
             }
             catch
             {
@@ -436,6 +472,9 @@ namespace FlugiClipboard
                 // 保存窗口尺寸到设置
                 SaveSettings();
 
+                // 重置ScrollViewer缓存，因为窗口布局可能已改变
+                ResetScrollViewerCache();
+
                 // 窗口尺寸已保存
             }
         }
@@ -561,6 +600,10 @@ namespace FlugiClipboard
                     // 停止内存清理定时器
                     _memoryCleanupTimer?.Stop();
                     _memoryCleanupTimer?.Dispose();
+
+                    // 停止时间更新定时器
+                    _timeUpdateTimer?.Stop();
+                    _timeUpdateTimer?.Dispose();
 
                     if (_hwndSource != null)
                     {
@@ -1692,6 +1735,117 @@ namespace FlugiClipboard
                 clipboardItem.IsPinned = !clipboardItem.IsPinned;
                 // 不显示状态信息，避免StatusTextBlock错误
             }
+        }
+
+        /// <summary>
+        /// 处理鼠标滚轮事件，确保在整个窗口区域都能滚动
+        /// 超高性能优化版本：提供极速、流畅、响应迅速的滚动体验
+        /// </summary>
+        private void MainWindow_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+        {
+            // 使用缓存的ScrollViewer，避免重复查找
+            if (_cachedScrollViewer == null)
+            {
+                _cachedScrollViewer = FindScrollViewer(this);
+            }
+
+            if (_cachedScrollViewer != null)
+            {
+                // 使用高精度时间计算，提高响应精度
+                DateTime currentTime = DateTime.Now;
+                double timeSinceLastScroll = (currentTime - _lastScrollTime).TotalMilliseconds;
+                _lastScrollTime = currentTime;
+
+                // 智能滚动算法：根据滚动频率和强度动态调整
+                double baseDelta = e.Delta;
+                double scrollMultiplier = BASE_SCROLL_MULTIPLIER; // 使用更高的基础滚动倍数
+
+                // 改进的连续滚动加速算法
+                if (timeSinceLastScroll < SCROLL_ACCELERATION_THRESHOLD_MS)
+                {
+                    // 更激进的加速算法，提供更好的连续滚动体验
+                    double accelerationFactor = Math.Max(0.1, 1.0 - timeSinceLastScroll / SCROLL_ACCELERATION_THRESHOLD_MS);
+                    _scrollVelocity = Math.Min(_scrollVelocity * 1.35 + Math.Abs(baseDelta) * accelerationFactor * 0.15, MAX_SCROLL_VELOCITY);
+
+                    // 动态调整滚动倍数，最高可达3倍速度
+                    double velocityBoost = 1.0 + (_scrollVelocity / MAX_SCROLL_VELOCITY) * 2.0;
+                    scrollMultiplier *= velocityBoost;
+                }
+                else
+                {
+                    // 更平滑的速度衰减
+                    _scrollVelocity *= SCROLL_VELOCITY_DECAY;
+                }
+
+                // 计算基础滚动量
+                double scrollAmount = -baseDelta * scrollMultiplier / 120.0;
+
+                // 改进的快速滚动检测：更低的阈值，更高的加速
+                if (Math.Abs(baseDelta) > FAST_SCROLL_THRESHOLD)
+                {
+                    scrollAmount *= FAST_SCROLL_BOOST; // 快速滚动时额外加速
+                }
+
+                // 添加微妙的缓动效果，让滚动更自然
+                double currentOffset = _cachedScrollViewer.VerticalOffset;
+                double targetOffset = currentOffset + scrollAmount;
+
+                // 边界检查：确保滚动位置在有效范围内
+                targetOffset = Math.Max(0, Math.Min(targetOffset, _cachedScrollViewer.ScrollableHeight));
+
+                // 执行滚动：使用ScrollToVerticalOffset实现即时响应
+                _cachedScrollViewer.ScrollToVerticalOffset(targetOffset);
+
+                // 标记事件已处理，防止其他控件重复处理
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// 高性能递归查找ScrollViewer控件
+        /// 优化版本：减少不必要的递归深度，提高查找效率
+        /// </summary>
+        private ScrollViewer? FindScrollViewer(DependencyObject parent)
+        {
+            if (parent is ScrollViewer scrollViewer)
+                return scrollViewer;
+
+            // 优化：限制递归深度，避免过深的查找
+            int childCount = VisualTreeHelper.GetChildrenCount(parent);
+            for (int i = 0; i < childCount; i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+
+                // 优先查找Grid和Border等常见容器
+                if (child is Grid || child is Border || child is ScrollViewer)
+                {
+                    var result = FindScrollViewer(child);
+                    if (result != null)
+                        return result;
+                }
+            }
+
+            // 如果在常见容器中没找到，再进行完整搜索
+            for (int i = 0; i < childCount; i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (!(child is Grid || child is Border || child is ScrollViewer))
+                {
+                    var result = FindScrollViewer(child);
+                    if (result != null)
+                        return result;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 重置ScrollViewer缓存，在窗口布局变化时调用
+        /// </summary>
+        private void ResetScrollViewerCache()
+        {
+            _cachedScrollViewer = null;
         }
 
         private void ClipboardItem_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -3383,6 +3537,14 @@ namespace FlugiClipboard
         protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        /// <summary>
+        /// 刷新时间显示，用于定时更新相对时间
+        /// </summary>
+        public void RefreshTimeDisplay()
+        {
+            OnPropertyChanged(nameof(TimeDisplay));
         }
     }
 }

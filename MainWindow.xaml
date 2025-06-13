@@ -148,11 +148,16 @@
                 </Grid>
             </Border>
 
-            <!-- 主内容区域 -->
+            <!-- 主内容区域 - 超高性能滚动优化 -->
             <ScrollViewer Grid.Row="2"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled"
-                      Background="Transparent">
+                      Background="Transparent"
+                      CanContentScroll="False"
+                      PanningMode="VerticalOnly"
+                      IsDeferredScrollingEnabled="False"
+                      UseLayoutRounding="True"
+                      SnapsToDevicePixels="True">
             <ScrollViewer.Resources>
                 <Style TargetType="ScrollBar" BasedOn="{StaticResource CustomScrollBarStyle}"/>
             </ScrollViewer.Resources>
@@ -163,9 +168,16 @@
                      BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                     ScrollViewer.CanContentScroll="False"
+                     ScrollViewer.IsDeferredScrollingEnabled="False"
                      VirtualizingPanel.IsVirtualizing="True"
                      VirtualizingPanel.VirtualizationMode="Recycling"
-                     VirtualizingPanel.ScrollUnit="Pixel">
+                     VirtualizingPanel.ScrollUnit="Pixel"
+                     VirtualizingPanel.CacheLengthUnit="Item"
+                     VirtualizingPanel.CacheLength="30,30"
+                     VirtualizingPanel.IsContainerVirtualizable="True"
+                     UseLayoutRounding="True"
+                     SnapsToDevicePixels="True">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
                         <VirtualizingStackPanel/>
