@@ -421,7 +421,7 @@
                     <TextBlock Text="关于" FontSize="24" FontWeight="SemiBold" Foreground="#323130" Margin="0,0,0,20"/>
 
                     <TextBlock Text="FlugiClipboard 剪贴板工具" FontSize="18" FontWeight="SemiBold" Foreground="#323130" Margin="0,0,0,10"/>
-                    <TextBlock Text="版本：0.1.0" FontSize="14" Foreground="#605E5C" Margin="0,0,0,5"/>
+                    <TextBlock Text="版本：0.1.1" FontSize="14" Foreground="#605E5C" Margin="0,0,0,5"/>
                     <TextBlock Text="开发者：Idun" FontSize="14" Foreground="#605E5C" Margin="0,0,0,10"/>
 
                     <!-- GitHub链接 -->

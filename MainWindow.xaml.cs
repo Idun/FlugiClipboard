@@ -521,10 +521,13 @@ namespace FlugiClipboard
                 
                 // 强制设置为置顶 - 确保窗口显示在最前端
                 Topmost = true;
-                
+
+                // 恢复透明度，防止黑色窗口问题
+                Opacity = 1.0;
+
                 // 先显示窗口，确保WindowState设置生效
                 Show();
-                
+
                 // 强制恢复窗口状态为Normal，确保不是最小化状态
                 WindowState = WindowState.Normal;
 
@@ -1461,6 +1464,54 @@ namespace FlugiClipboard
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"打开程序目录失败: {ex.Message}");
+            }
+        }
+
+        private void QRCodeButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // 获取当前选中的文本或最新的剪贴板文本
+                string textToConvert = "";
+
+                // 如果有剪贴板历史，使用最新的文本项
+                var latestTextItem = _clipboardHistory.FirstOrDefault(item => !item.IsImage && !string.IsNullOrWhiteSpace(item.Text));
+                if (latestTextItem != null)
+                {
+                    textToConvert = latestTextItem.Text;
+                }
+
+                // 创建QR码窗口
+                QRCodeWindow qrWindow = new QRCodeWindow(textToConvert);
+
+                // 设置QR码窗口位置（在主窗口位置附近）
+                qrWindow.Left = Left + (Width - qrWindow.Width) / 2;
+                qrWindow.Top = Top + (Height - qrWindow.Height) / 2;
+
+                // 确保窗口在屏幕范围内
+                if (qrWindow.Left < 0) qrWindow.Left = 0;
+                if (qrWindow.Top < 0) qrWindow.Top = 0;
+                if (qrWindow.Left + qrWindow.Width > SystemParameters.PrimaryScreenWidth)
+                    qrWindow.Left = SystemParameters.PrimaryScreenWidth - qrWindow.Width;
+                if (qrWindow.Top + qrWindow.Height > SystemParameters.PrimaryScreenHeight)
+                    qrWindow.Top = SystemParameters.PrimaryScreenHeight - qrWindow.Height;
+
+                // 直接隐藏主窗口到后台静默状态
+                Hide();
+
+                // 显示QR码窗口
+                qrWindow.ShowDialog();
+
+                // QR码窗口关闭后，如果有记录的前台窗口，恢复到那个窗口
+                if (_previousForegroundWindow != IntPtr.Zero)
+                {
+                    SetForegroundWindow(_previousForegroundWindow);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"打开QR码窗口失败: {ex.Message}");
+                MessageBox.Show($"打开QR码窗口时出错: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
