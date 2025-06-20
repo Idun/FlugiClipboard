@@ -133,6 +133,14 @@
                                 Margin="0,0,8,0"
                                 Click="QRCodeButton_Click"
                                 ToolTip="生成二维码"/>
+                        <Button Name="NoteButton" Content="📝"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                FontSize="14"
+                                Padding="8,4"
+                                Margin="0,0,8,0"
+                                Click="NoteButton_Click"
+                                ToolTip="随手记事"/>
                     </StackPanel>
 
                     <!-- 右侧图标 -->

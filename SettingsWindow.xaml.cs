@@ -30,6 +30,11 @@ namespace FlugiClipboard
         private uint _currentAiTranslateModifiers = 0;
         private uint _currentAiTranslateKey = 0;
         private bool _isCapturingAiTranslateHotkey = false;
+
+        // 的地得变换快捷键相关属性
+        private uint _currentDeDeDeModifiers = 0;
+        private uint _currentDeDeDeKey = 0;
+        private bool _isCapturingDeDeDeHotkey = false;
         
         // 记录窗口大小
         private static double _savedWindowWidth = 600;
@@ -61,11 +66,18 @@ namespace FlugiClipboard
         public uint AiTranslateHotkeyModifiers { get; set; } = 0;
         public uint AiTranslateHotkeyKey { get; set; } = 0;
 
+        // 的地得变换功能属性
+        public bool DeDeDeEnabled { get; set; } = true;
+        public uint DeDeDeHotkeyModifiers { get; set; } = 0;
+        public uint DeDeDeHotkeyKey { get; set; } = 0;
+
         // 默认快捷键值
         private const uint DEFAULT_HOTKEY_MODIFIERS = 0x0001 | 0x0002; // MOD_ALT | MOD_CONTROL
         private const uint DEFAULT_HOTKEY_KEY = 0x43; // C
         private const uint DEFAULT_TEXT_SWAP_MODIFIERS = 0x0002; // MOD_CONTROL
         private const uint DEFAULT_TEXT_SWAP_KEY = 0x51; // Q
+        private const uint DEFAULT_DEDEDE_MODIFIERS = 0x0002; // MOD_CONTROL
+        private const uint DEFAULT_DEDEDE_KEY = 0x47; // G
 
         public SettingsWindow()
         {
@@ -199,6 +211,8 @@ namespace FlugiClipboard
             // 加载AI翻译设置
             LoadAiTranslateSettings();
 
+            // 加载的地得变换设置
+            LoadDeDeDeSettings();
 
         }
 
@@ -211,6 +225,7 @@ namespace FlugiClipboard
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 LoadAiTranslateSettings();
+                LoadDeDeDeSettings();
             }), System.Windows.Threading.DispatcherPriority.Loaded);
         }
 
@@ -281,6 +296,37 @@ namespace FlugiClipboard
             
             // 更新界面显示
             UpdateAiTranslateHotkeyDisplay();
+        }
+
+        private void LoadDeDeDeSettings()
+        {
+            // 加载的地得变换功能开关
+            if (DeDeDeEnabledCheckBox != null)
+            {
+                DeDeDeEnabledCheckBox.IsChecked = DeDeDeEnabled;
+            }
+
+            // 检查是否需要升级旧的快捷键设置为新的 Ctrl+G
+            if ((DeDeDeHotkeyModifiers == 0x0002 && DeDeDeHotkeyKey == 0x44) || // 旧的 Ctrl+D
+                (DeDeDeHotkeyModifiers == (0x0002 | 0x0004) && DeDeDeHotkeyKey == 0x44)) // 旧的 Ctrl+Shift+D
+            {
+                // 升级为新的默认快捷键 Ctrl+G
+                DeDeDeHotkeyModifiers = DEFAULT_DEDEDE_MODIFIERS; // MOD_CONTROL
+                DeDeDeHotkeyKey = DEFAULT_DEDEDE_KEY; // G
+            }
+            // 设置默认快捷键（仅在没有设置时）
+            else if (DeDeDeHotkeyModifiers == 0 || DeDeDeHotkeyKey == 0)
+            {
+                DeDeDeHotkeyModifiers = DEFAULT_DEDEDE_MODIFIERS; // MOD_CONTROL
+                DeDeDeHotkeyKey = DEFAULT_DEDEDE_KEY; // G
+            }
+
+            // 使用传入的快捷键值
+            _currentDeDeDeModifiers = DeDeDeHotkeyModifiers;
+            _currentDeDeDeKey = DeDeDeHotkeyKey;
+
+            // 更新界面显示
+            UpdateDeDeDeHotkeyDisplay();
         }
 
         private void UpdateHotkeyDisplay()
@@ -356,6 +402,32 @@ namespace FlugiClipboard
             }
         }
 
+        private void UpdateDeDeDeHotkeyDisplay()
+        {
+            string hotkeyText = "";
+
+            // 添加修饰键 - 按照标准顺序：Ctrl+Alt+Shift
+            if ((_currentDeDeDeModifiers & 0x0002) != 0) hotkeyText += "Ctrl+";
+            if ((_currentDeDeDeModifiers & 0x0001) != 0) hotkeyText += "Alt+";
+            if ((_currentDeDeDeModifiers & 0x0004) != 0) hotkeyText += "Shift+";
+
+            // 添加主键
+            if (_currentDeDeDeKey != 0)
+            {
+                hotkeyText += GetKeyName(_currentDeDeDeKey);
+            }
+
+            if (string.IsNullOrEmpty(hotkeyText))
+            {
+                hotkeyText = "未设置";
+            }
+
+            if (DeDeDeHotkeyDisplayTextBlock != null)
+            {
+                DeDeDeHotkeyDisplayTextBlock.Text = hotkeyText;
+            }
+        }
+
         private string GetKeyName(uint keyCode)
         {
             return keyCode switch
@@ -383,6 +455,10 @@ namespace FlugiClipboard
                 GeneralTabButton.Style = (Style)FindResource("SidebarButtonStyle");
                 HotkeyTabButton.Style = (Style)FindResource("SidebarButtonStyle");
                 TextSwapTabButton.Style = (Style)FindResource("SidebarButtonStyle");
+                if (DeDeDeTabButton != null)
+                {
+                    DeDeDeTabButton.Style = (Style)FindResource("SidebarButtonStyle");
+                }
                 if (AiTranslateTabButton != null)
                 {
                     AiTranslateTabButton.Style = (Style)FindResource("SidebarButtonStyle");
@@ -396,6 +472,10 @@ namespace FlugiClipboard
                 GeneralPanel.Visibility = Visibility.Collapsed;
                 HotkeyPanel.Visibility = Visibility.Collapsed;
                 TextSwapPanel.Visibility = Visibility.Collapsed;
+                if (DeDeDePanel != null)
+                {
+                    DeDeDePanel.Visibility = Visibility.Collapsed;
+                }
                 if (AiTranslatePanel != null)
                 {
                     AiTranslatePanel.Visibility = Visibility.Collapsed;
@@ -414,6 +494,12 @@ namespace FlugiClipboard
                         break;
                     case "TextSwap":
                         TextSwapPanel.Visibility = Visibility.Visible;
+                        break;
+                    case "DeDeDe":
+                        if (DeDeDePanel != null)
+                        {
+                            DeDeDePanel.Visibility = Visibility.Visible;
+                        }
                         break;
                     case "AiTranslate":
                         if (AiTranslatePanel != null)
@@ -487,7 +573,8 @@ namespace FlugiClipboard
                 // 保存AI翻译设置
                 SaveAiTranslateSettings();
 
-
+                // 保存的地得变换设置
+                SaveDeDeDeSettings();
 
                 // 保存窗口尺寸
                 SaveWindowSize();
@@ -1506,6 +1593,158 @@ namespace FlugiClipboard
             }
 
             return models.Where(m => !string.IsNullOrEmpty(m)).ToList();
+        }
+
+        // 的地得变换功能相关方法
+        private void SaveDeDeDeSettings()
+        {
+            DeDeDeEnabled = DeDeDeEnabledCheckBox?.IsChecked ?? true;
+            DeDeDeHotkeyModifiers = _currentDeDeDeModifiers;
+            DeDeDeHotkeyKey = _currentDeDeDeKey;
+        }
+
+        // 的地得变换快捷键事件处理
+        private void DeDeDeHotkeyInputButton_Click(object sender, RoutedEventArgs e)
+        {
+            _isCapturingDeDeDeHotkey = true;
+            DeDeDeHotkeyInputButton.Content = "请按下快捷键...";
+            DeDeDeHotkeyInputButton.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 248, 220)); // 浅黄色
+            DeDeDeHotkeyInputTextBox.Focus();
+        }
+
+        private void DeDeDeHotkeyInputTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (!_isCapturingDeDeDeHotkey) return;
+
+            e.Handled = true;
+
+            // 获取修饰键
+            uint modifiers = 0;
+            if (Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl))
+                modifiers |= 0x0002; // MOD_CONTROL
+            if (Keyboard.IsKeyDown(Key.LeftAlt) || Keyboard.IsKeyDown(Key.RightAlt))
+                modifiers |= 0x0001; // MOD_ALT
+            if (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
+                modifiers |= 0x0004; // MOD_SHIFT
+            if (Keyboard.IsKeyDown(Key.LWin) || Keyboard.IsKeyDown(Key.RWin))
+                modifiers |= 0x0008; // MOD_WIN
+
+            // 获取主键（排除修饰键）
+            Key key = e.Key;
+            if (key == Key.LeftCtrl || key == Key.RightCtrl ||
+                key == Key.LeftAlt || key == Key.RightAlt ||
+                key == Key.LeftShift || key == Key.RightShift ||
+                key == Key.LWin || key == Key.RWin)
+            {
+                return; // 忽略单独的修饰键
+            }
+
+            // 转换为虚拟键码
+            uint vkCode = (uint)KeyInterop.VirtualKeyFromKey(key);
+
+            // 验证快捷键有效性
+            if (modifiers == 0)
+            {
+                MessageBox.Show("请至少按下一个修饰键（Ctrl、Alt、Shift或Win）", "无效快捷键",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                ResetDeDeDeHotkeyCapture();
+                return;
+            }
+
+            // 保存快捷键
+            _currentDeDeDeModifiers = modifiers;
+            _currentDeDeDeKey = vkCode;
+
+            UpdateDeDeDeHotkeyDisplay();
+            ResetDeDeDeHotkeyCapture();
+        }
+
+        private void DeDeDeHotkeyInputTextBox_GotFocus(object sender, RoutedEventArgs e)
+        {
+            if (_isCapturingDeDeDeHotkey)
+            {
+                DeDeDeHotkeyInputButton.Content = "请按下快捷键...";
+            }
+        }
+
+        private void DeDeDeHotkeyInputTextBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (_isCapturingDeDeDeHotkey)
+            {
+                ResetDeDeDeHotkeyCapture();
+            }
+        }
+
+        private void ClearDeDeDeHotkey_Click(object sender, RoutedEventArgs e)
+        {
+            _currentDeDeDeModifiers = 0;
+            _currentDeDeDeKey = 0;
+            UpdateDeDeDeHotkeyDisplay();
+        }
+
+        private void ResetDefaultDeDeDeHotkey_Click(object sender, RoutedEventArgs e)
+        {
+            _currentDeDeDeModifiers = DEFAULT_DEDEDE_MODIFIERS;
+            _currentDeDeDeKey = DEFAULT_DEDEDE_KEY;
+            UpdateDeDeDeHotkeyDisplay();
+        }
+
+        private void SaveDeDeDe_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // 保存的地得变换设置
+                SaveDeDeDeSettings();
+
+                // 保存其他设置
+                if (int.TryParse(MaxItemsTextBox.Text, out int maxItems) && maxItems > 0 && maxItems <= 100)
+                {
+                    MaxItems = maxItems;
+                }
+
+                SingleClickPaste = SingleClickPasteCheckBox.IsChecked ?? false;
+                DoubleClickPaste = DoubleClickPasteCheckBox.IsChecked ?? true;
+                SaveHistoryEnabled = SaveHistoryCheckBox.IsChecked ?? false;
+                HistoryFolderPath = HistoryPathTextBox.Text.Trim();
+                HotkeyModifiers = _currentModifiers;
+                HotkeyKey = _currentKey;
+                StartupEnabled = StartupEnabledCheckBox.IsChecked ?? false;
+                TextSwapEnabled = TextSwapEnabledCheckBox.IsChecked ?? false;
+                TextSwapHotkeyModifiers = _currentTextSwapModifiers;
+                TextSwapHotkeyKey = _currentTextSwapKey;
+
+                // 保存AI翻译设置
+                SaveAiTranslateSettings();
+
+                // 保存窗口尺寸
+                SaveWindowSize();
+
+                // 关闭窗口
+                DialogResult = true;
+                Close();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"保存设置时出错: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void CancelDeDeDe_Click(object sender, RoutedEventArgs e)
+        {
+            LoadDeDeDeSettings(); // 重新加载设置，取消更改
+
+            // 保存窗口尺寸
+            SaveWindowSize();
+
+            DialogResult = false;
+            Close();
+        }
+
+        private void ResetDeDeDeHotkeyCapture()
+        {
+            _isCapturingDeDeDeHotkey = false;
+            DeDeDeHotkeyInputButton.Content = "点击此处设置快捷键";
+            DeDeDeHotkeyInputButton.Background = System.Windows.Media.Brushes.Transparent;
         }
     }
 }

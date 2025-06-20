@@ -1,0 +1,183 @@
+<Window x:Class="FlugiClipboard.NoteWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="随手记事 - FlugiClipboard"
+        Width="500"
+        Height="400"
+        MinWidth="400"
+        MinHeight="300"
+        WindowStartupLocation="CenterScreen"
+        Background="#F3F3F3"
+        ResizeMode="CanResize"
+        ShowInTaskbar="True"
+        WindowStyle="None"
+        AllowsTransparency="False"
+        Icon="ico/ilo.ico">
+
+    <Window.Resources>
+        <!-- 圆形按钮样式 -->
+        <Style x:Key="CircleButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="12"/>
+            <Setter Property="Height" Value="12"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Margin" Value="4,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Ellipse Fill="{TemplateBinding Background}"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 自定义滚动条样式 -->
+        <Style x:Key="CustomScrollBarStyle" TargetType="ScrollBar">
+            <Setter Property="Background" Value="#F5F5F5"/>
+            <Setter Property="Width" Value="12"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid>
+                            <Rectangle Fill="{TemplateBinding Background}" RadiusX="6" RadiusY="6"/>
+                            <Track Name="PART_Track" IsDirectionReversed="True">
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Rectangle Fill="#C1C1C1" RadiusX="6" RadiusY="6"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <!-- 窗口边框 -->
+    <Border Background="White" BorderBrush="#E1E1E1" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- 自定义标题栏 -->
+            <Border Grid.Row="0" Background="White"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid Height="32">
+                    <!-- 窗口标题 -->
+                    <TextBlock Text="随手记事" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               FontSize="14" Foreground="#323130" FontWeight="Medium"/>
+
+                    <!-- 窗口控制按钮 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                VerticalAlignment="Center" Margin="0,0,12,0">
+                        <Button Name="MinimizeButton" Style="{StaticResource CircleButtonStyle}"
+                                Background="#FFBD2E" Click="MinimizeButton_Click" ToolTip="最小化"/>
+                        <Button Name="MaximizeButton" Style="{StaticResource CircleButtonStyle}"
+                                Background="#27CA3F" Click="MaximizeButton_Click" ToolTip="最大化"/>
+                        <Button Name="CloseButton" Style="{StaticResource CircleButtonStyle}"
+                                Background="#FF5F56" Click="CloseButton_Click" ToolTip="关闭"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 功能按钮栏 -->
+            <Border Grid.Row="1" Background="#F8F9FA" Padding="16,12" BorderBrush="#E1E1E1" BorderThickness="0,0,0,1">
+                <Grid>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                        <TextBlock Text="📝" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="随手记事" FontSize="16" FontWeight="SemiBold" Foreground="#323130" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Name="SaveButton" Content="💾"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                FontSize="14"
+                                Padding="8,4"
+                                Margin="0,0,8,0"
+                                Click="SaveButton_Click"
+                                ToolTip="保存记事"/>
+                        <Button Name="PinButton" Content="📌"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                FontSize="14"
+                                Padding="8,4"
+                                Click="PinButton_Click"
+                                ToolTip="置顶"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 主编辑区域 -->
+            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Padding="16">
+            <ScrollViewer.Resources>
+                <Style TargetType="ScrollBar" BasedOn="{StaticResource CustomScrollBarStyle}"/>
+            </ScrollViewer.Resources>
+            
+            <TextBox Name="NoteTextBox"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     FontSize="14"
+                     FontFamily="Microsoft YaHei UI, Segoe UI"
+                     TextWrapping="Wrap"
+                     AcceptsReturn="True"
+                     AcceptsTab="True"
+                     VerticalScrollBarVisibility="Disabled"
+                     HorizontalScrollBarVisibility="Disabled"
+                     Foreground="#323130"
+                     CaretBrush="#0078D4"
+                     SelectionBrush="#CCE7FF">
+                <TextBox.Style>
+                    <Style TargetType="TextBox">
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="TextBox">
+                                    <ScrollViewer x:Name="PART_ContentHost" 
+                                                  Background="{TemplateBinding Background}"
+                                                  Focusable="False"
+                                                  HorizontalScrollBarVisibility="Hidden"
+                                                  VerticalScrollBarVisibility="Hidden"/>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </TextBox.Style>
+            </TextBox>
+        </ScrollViewer>
+
+            <!-- 状态栏 -->
+            <Border Grid.Row="3" Background="#F8F9FA" Padding="16,8" BorderBrush="#E1E1E1" BorderThickness="0,1,0,0">
+            <Grid>
+                <TextBlock Name="StatusTextBlock"
+                           Text="随时记录您的想法和重要信息"
+                           FontSize="11"
+                           Foreground="#605E5C"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"/>
+                
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <TextBlock Name="CharCountTextBlock"
+                               Text="字符数: 0"
+                               FontSize="11"
+                               Foreground="#605E5C"
+                               VerticalAlignment="Center"
+                               Margin="0,0,16,0"/>
+                    <TextBlock Name="LastSavedTextBlock"
+                               Text=""
+                               FontSize="11"
+                               Foreground="#605E5C"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+        </Grid>
+    </Border>
+</Window>

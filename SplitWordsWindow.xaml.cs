@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
@@ -318,14 +319,14 @@ namespace FlugiClipboard
 
         private void UpdateSelectedText()
         {
-            var selectedSegments = _segments.Where(s => s.IsSelected).OrderBy(s => s.StartIndex);
-            // 去掉空格，直接连接词块
-            var selectedText = string.Join("", selectedSegments.Select(s => s.Text));
+            var selectedSegments = _segments.Where(s => s.IsSelected).OrderBy(s => s.StartIndex).ToList();
+            // 使用智能连接词块
+            var selectedText = SmartJoinSegments(selectedSegments);
 
             SelectedTextBlock.Text = string.IsNullOrEmpty(selectedText) ? "(未选择任何词块)" : $"已选择: {selectedText}";
 
             // 更新状态栏
-            int selectedCount = selectedSegments.Count();
+            int selectedCount = selectedSegments.Count;
             StatusTextBlock.Text = $"已选择 {selectedCount} 个词块，共 {_segments.Count} 个";
         }
 
@@ -333,16 +334,17 @@ namespace FlugiClipboard
         {
             try
             {
-                var selectedSegments = _segments.Where(s => s.IsSelected).OrderBy(s => s.StartIndex);
-                // 去掉空格，直接连接词块
-                var selectedText = string.Join("", selectedSegments.Select(s => s.Text));
+                var selectedSegments = _segments.Where(s => s.IsSelected).OrderBy(s => s.StartIndex).ToList();
 
-                if (string.IsNullOrEmpty(selectedText))
+                if (!selectedSegments.Any())
                 {
                     MessageBox.Show("请先选择要输入的词块", "提示",
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
+
+                // 智能连接词块：中文之间不加空格，英文单词之间加空格
+                var selectedText = SmartJoinSegments(selectedSegments);
 
                 // 执行自动输入到目标窗口
                 AutoInputText(selectedText);
@@ -352,6 +354,70 @@ namespace FlugiClipboard
                 MessageBox.Show($"输入失败: {ex.Message}", "错误",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+
+        /// <summary>
+        /// 智能连接词块，中英文混合时正确处理空格
+        /// </summary>
+        private string SmartJoinSegments(List<SegmentInfo> segments)
+        {
+            if (!segments.Any()) return "";
+            if (segments.Count == 1) return segments[0].Text;
+
+            var result = new StringBuilder();
+
+            for (int i = 0; i < segments.Count; i++)
+            {
+                var currentText = segments[i].Text;
+                result.Append(currentText);
+
+                // 如果不是最后一个词块，判断是否需要添加空格
+                if (i < segments.Count - 1)
+                {
+                    var nextText = segments[i + 1].Text;
+
+                    // 判断当前词块和下一个词块是否需要空格分隔
+                    if (NeedsSpaceBetween(currentText, nextText))
+                    {
+                        result.Append(" ");
+                    }
+                }
+            }
+
+            return result.ToString();
+        }
+
+        /// <summary>
+        /// 判断两个词块之间是否需要空格
+        /// </summary>
+        private bool NeedsSpaceBetween(string current, string next)
+        {
+            if (string.IsNullOrEmpty(current) || string.IsNullOrEmpty(next))
+                return false;
+
+            // 获取当前词块的最后一个字符和下一个词块的第一个字符
+            char lastChar = current[current.Length - 1];
+            char firstChar = next[0];
+
+            // 如果两个都是英文字母或数字，需要空格
+            bool currentIsAlphaNum = char.IsLetterOrDigit(lastChar);
+            bool nextIsAlphaNum = char.IsLetterOrDigit(firstChar);
+
+            // 如果当前词块以英文字母/数字结尾，下一个词块以英文字母/数字开头，则需要空格
+            if (currentIsAlphaNum && nextIsAlphaNum)
+            {
+                // 进一步检查是否为英文字符（ASCII范围）
+                bool currentIsAscii = lastChar <= 127;
+                bool nextIsAscii = firstChar <= 127;
+
+                if (currentIsAscii && nextIsAscii)
+                {
+                    return true;
+                }
+            }
+
+            // 其他情况不需要空格（如中文字符之间）
+            return false;
         }
 
         private void ClearSelectionButton_Click(object sender, RoutedEventArgs e)
@@ -375,9 +441,9 @@ namespace FlugiClipboard
         {
             try
             {
-                var selectedSegments = _segments.Where(s => s.IsSelected).OrderBy(s => s.StartIndex);
-                // 去掉空格，直接连接词块
-                var selectedText = string.Join("", selectedSegments.Select(s => s.Text));
+                var selectedSegments = _segments.Where(s => s.IsSelected).OrderBy(s => s.StartIndex).ToList();
+                // 使用智能连接词块
+                var selectedText = SmartJoinSegments(selectedSegments);
 
                 if (string.IsNullOrEmpty(selectedText))
                 {

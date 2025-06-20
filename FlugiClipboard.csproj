@@ -16,11 +16,13 @@
 
     <!-- 性能优化 -->
     <DebugType>none</DebugType>
+
     <Optimize>true</Optimize>
 
     <!-- 应用图标 -->
     <ApplicationIcon>ico\ilo.ico</ApplicationIcon>
   </PropertyGroup>
+
 
   <!-- Release配置的额外优化 -->
   <PropertyGroup Condition="'$(Configuration)'=='Release'">

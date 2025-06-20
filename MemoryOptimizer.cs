@@ -105,16 +105,17 @@ namespace FlugiClipboard
         /// <summary>
         /// 优化字符串内存使用
         /// </summary>
-        public static string OptimizeString(string input, int maxLength = 1000)
+        public static string OptimizeString(string input, int maxLength = 50000) // 大幅增加默认限制到50000字符
         {
             if (string.IsNullOrEmpty(input))
                 return string.Empty;
 
+            // 只有在文本极长时才进行截断（50000字符约25-50页文档）
             if (input.Length <= maxLength)
                 return input;
 
-            // 截断过长的字符串以节省内存
-            return string.Concat(input.AsSpan(0, maxLength), "...");
+            // 截断过长的字符串以节省内存，但保留更多内容
+            return string.Concat(input.AsSpan(0, maxLength), "\n\n[内容过长已截断...]");
         }
 
         /// <summary>

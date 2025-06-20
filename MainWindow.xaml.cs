@@ -37,6 +37,7 @@ namespace FlugiClipboard
         private uint _hotkeyKey = VK_C;
         private bool _saveHistoryEnabled = false;
         private string _historyFolderPath = "";
+        private bool _isInternalClipboardOperation = false; // 标记内部剪贴板操作，避免干扰焦点
 
         // 智能文字交换功能相关
         private bool _textSwapEnabled = true; // 默认启用智能文字交换功能
@@ -44,6 +45,12 @@ namespace FlugiClipboard
         private uint _textSwapHotkeyKey = VK_Q;
         private bool _isPerformingTextSwap = false; // 防止递归调用和剪贴板监控冲突
         private bool _disableTextSwapHotkey = false; // 完全禁用智能文字交换热键注册
+
+        // 的地得变换功能相关
+        private bool _deDeDeEnabled = true; // 默认启用的地得变换功能
+        private uint _deDeDeHotkeyModifiers = MOD_CONTROL | MOD_SHIFT; // 默认 Ctrl+Shift+D
+        private uint _deDeDeHotkeyKey = VK_D;
+        private bool _isPerformingDeDeDe = false; // 防止递归调用
 
         // 开机启动功能相关
         private bool _startupEnabled = false;
@@ -110,6 +117,61 @@ namespace FlugiClipboard
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
         [DllImport("user32.dll")]
+        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct INPUT
+        {
+            public uint type;
+            public INPUTUNION union;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        public struct INPUTUNION
+        {
+            [FieldOffset(0)]
+            public MOUSEINPUT mi;
+            [FieldOffset(0)]
+            public KEYBDINPUT ki;
+            [FieldOffset(0)]
+            public HARDWAREINPUT hi;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public UIntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MOUSEINPUT
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint dwFlags;
+            public uint time;
+            public UIntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct HARDWAREINPUT
+        {
+            public uint uMsg;
+            public ushort wParamL;
+            public ushort wParamH;
+        }
+
+        private const uint INPUT_KEYBOARD = 1;
+        private const uint KEYEVENTF_KEYDOWN = 0x0000;
+        private const uint KEYEVENTF_KEYUP = 0x0002;
+        private const uint KEYEVENTF_UNICODE = 0x0004;
+
+        [DllImport("user32.dll")]
         private static extern IntPtr GetFocus();
 
         [DllImport("user32.dll")]
@@ -120,6 +182,9 @@ namespace FlugiClipboard
 
         [DllImport("user32.dll")]
         private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
         [DllImport("user32.dll")]
         private static extern bool ScreenToClient(IntPtr hWnd, ref POINT lpPoint);
@@ -138,7 +203,6 @@ namespace FlugiClipboard
 
         private const byte VK_CONTROL = 0x11;
         private const int VK_V = 0x56;
-        private const uint KEYEVENTF_KEYUP = 0x0002;
 
         private const uint CWP_ALL = 0x0000;
         private const uint CWP_SKIPINVISIBLE = 0x0001;
@@ -163,6 +227,7 @@ namespace FlugiClipboard
         private const int TEXT_SWAP_HOTKEY_ID = 9001;
         // AI翻译快捷键将使用新的ID和逻辑
         private const int AI_TRANSLATE_HOTKEY_NEW_ID = 9003;
+        private const int DEDEDE_HOTKEY_ID = 9004;
         private const uint MOD_CONTROL = 0x0002;
         private const uint MOD_ALT = 0x0001;
         private const uint MOD_SHIFT = 0x0004;
@@ -172,6 +237,8 @@ namespace FlugiClipboard
         private const uint VK_A = 0x41; // A键
         private const uint VK_Q = 0x51; // Q键
         private const uint VK_T = 0x54; // T键
+        private const uint VK_D = 0x44; // D键
+        private const uint VK_G = 0x47; // G键
         private const uint VK_SPACE = 0x20; // 空格键
         private const uint VK_CAPITAL = 0x14; // Caps Lock键
         private const int WM_HOTKEY = 0x0312;
@@ -414,7 +481,7 @@ namespace FlugiClipboard
             }
             catch (System.Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"初始化系统托盘失败: {ex.Message}");
+
                 // 即使托盘初始化失败，程序也应该继续运行
             }
         }
@@ -649,39 +716,87 @@ namespace FlugiClipboard
                     return IntPtr.Zero; // 正在执行文字交换，忽略剪贴板更新
                 }
 
+                // 如果是内部剪贴板操作（如复制按钮点击），短暂忽略以避免干扰焦点
+                if (_isInternalClipboardOperation)
+                {
+                    return IntPtr.Zero; // 内部操作，忽略剪贴板更新
+                }
+
                 try
                 {
                     ClipboardItem? newItem = null;
 
-                    // 检查是否包含图片
-                    if (System.Windows.Clipboard.ContainsImage())
+                    // 增强剪贴板内容检测，提高可靠性
+                    bool hasImage = false;
+                    bool hasText = false;
+
+                    // 多次尝试检测剪贴板内容，提高成功率
+                    for (int attempt = 0; attempt < 3; attempt++)
                     {
-                        var image = System.Windows.Clipboard.GetImage();
-                        if (image != null)
+                        try
                         {
-                            // 检查是否已存在相同图片（简单比较尺寸）
-                            if (!_clipboardHistory.Any(item => item.IsImage &&
-                                item.Image?.PixelWidth == image.PixelWidth &&
-                                item.Image?.PixelHeight == image.PixelHeight))
+                            hasImage = System.Windows.Clipboard.ContainsImage();
+                            hasText = System.Windows.Clipboard.ContainsText();
+                            break; // 成功检测，退出循环
+                        }
+                        catch
+                        {
+                            if (attempt < 2) // 不是最后一次尝试
                             {
-                                newItem = new ClipboardItem(image);
+                                System.Threading.Thread.Sleep(50); // 短暂等待后重试
+                                continue;
                             }
+                            // 最后一次尝试失败，使用默认值
+                            hasImage = false;
+                            hasText = false;
+                        }
+                    }
+
+                    // 检查是否包含图片
+                    if (hasImage)
+                    {
+                        try
+                        {
+                            var image = System.Windows.Clipboard.GetImage();
+                            if (image != null)
+                            {
+                                // 检查是否已存在相同图片（简单比较尺寸）
+                                if (!_clipboardHistory.Any(item => item.IsImage &&
+                                    item.Image?.PixelWidth == image.PixelWidth &&
+                                    item.Image?.PixelHeight == image.PixelHeight))
+                                {
+                                    newItem = new ClipboardItem(image);
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // 图片获取失败，忽略
                         }
                     }
                     // 检查是否包含文本
-                    else if (System.Windows.Clipboard.ContainsText())
+                    else if (hasText)
                     {
-                        string text = System.Windows.Clipboard.GetText();
-                        if (!string.IsNullOrWhiteSpace(text))
+                        try
                         {
-                            // 优化文本长度以节省内存
-                            text = MemoryOptimizer.OptimizeString(text, 2000);
-
-                            // 检查是否已存在相同文本
-                            if (!_clipboardHistory.Any(item => !item.IsImage && item.Text == text))
+                            string text = System.Windows.Clipboard.GetText();
+                            if (!string.IsNullOrWhiteSpace(text))
                             {
-                                newItem = new ClipboardItem(text);
+                                // 移除文本长度限制，保留完整内容
+                                // text = MemoryOptimizer.OptimizeString(text, 2000); // 注释掉限制
+
+                                // 检查是否已存在相同文本（只比较前1000字符以提高性能）
+                                string textToCompare = text.Length > 1000 ? text.Substring(0, 1000) : text;
+                                if (!_clipboardHistory.Any(item => !item.IsImage &&
+                                    (item.Text.Length > 1000 ? item.Text.Substring(0, 1000) : item.Text) == textToCompare))
+                                {
+                                    newItem = new ClipboardItem(text);
+                                }
                             }
+                        }
+                        catch
+                        {
+                            // 文本获取失败，忽略
                         }
                     }
 
@@ -749,6 +864,15 @@ namespace FlugiClipboard
                     HandleAiTranslateHotkeyNew();
                     handled = true;
                 }
+                else if (hotkeyId == DEDEDE_HOTKEY_ID)
+                {
+                    // 的地得变换热键处理逻辑
+                    if (_deDeDeEnabled)
+                    {
+                        PerformDeDeDeTransform();
+                    }
+                    handled = true;
+                }
             }
             return IntPtr.Zero;
         }
@@ -778,6 +902,20 @@ namespace FlugiClipboard
 
                     // 注册AI翻译快捷键
                     RegisterAiTranslateHotkeyNew();
+
+                    // 注册的地得变换快捷键
+                    if (_deDeDeEnabled && _deDeDeHotkeyModifiers != 0 && _deDeDeHotkeyKey != 0)
+                    {
+                        // 检查是否与其他热键冲突
+                        bool isConflictWithClipboard = (_hotkeyModifiers == _deDeDeHotkeyModifiers && _hotkeyKey == _deDeDeHotkeyKey);
+                        bool isConflictWithTextSwap = (_textSwapHotkeyModifiers == _deDeDeHotkeyModifiers && _textSwapHotkeyKey == _deDeDeHotkeyKey);
+                        bool isConflictWithAiTranslate = (_aiTranslateHotkeyNewModifiers == _deDeDeHotkeyModifiers && _aiTranslateHotkeyNewKey == _deDeDeHotkeyKey);
+
+                        if (!isConflictWithClipboard && !isConflictWithTextSwap && !isConflictWithAiTranslate)
+                        {
+                            TryRegisterHotkey(helper.Handle, DEDEDE_HOTKEY_ID, _deDeDeHotkeyModifiers, _deDeDeHotkeyKey, "的地得变换");
+                        }
+                    }
                 }
             }
             catch
@@ -797,11 +935,9 @@ namespace FlugiClipboard
                 // 注册新热键
                 bool success = RegisterHotKey(handle, id, modifiers, key);
 
-                // 热键注册结果处理已简化
-
                 return success;
             }
-            catch
+            catch (Exception ex)
             {
                 return false;
             }
@@ -979,6 +1115,11 @@ namespace FlugiClipboard
                 _textSwapHotkeyModifiers = MOD_CONTROL;
                 _textSwapHotkeyKey = VK_Q;
 
+                // 的地得变换默认设置
+                _deDeDeEnabled = true; // 默认启用的地得变换功能
+                _deDeDeHotkeyModifiers = MOD_CONTROL; // 改为 Ctrl+G 避免冲突
+                _deDeDeHotkeyKey = VK_G;
+
                 // 开机启动默认设置
                 _startupEnabled = false;
 
@@ -1110,6 +1251,18 @@ namespace FlugiClipboard
                                     // 保持旧变量兼容性
                                     _aiTranslateHotkeyKey = aiTranslateKey;
                                 }
+                                else if (key == "DeDeDeEnabled" && bool.TryParse(value, out bool deDeDeEnabled))
+                                {
+                                    _deDeDeEnabled = deDeDeEnabled;
+                                }
+                                else if (key == "DeDeDeHotkeyModifiers" && uint.TryParse(value, out uint deDeDeModifiers))
+                                {
+                                    _deDeDeHotkeyModifiers = deDeDeModifiers;
+                                }
+                                else if (key == "DeDeDeHotkeyKey" && uint.TryParse(value, out uint deDeDeKey))
+                                {
+                                    _deDeDeHotkeyKey = deDeDeKey;
+                                }
                             }
                         }
                     }
@@ -1129,6 +1282,15 @@ namespace FlugiClipboard
                     _aiTranslateHotkeyNewKey = VK_T;
                     _aiTranslateHotkeyModifiers = MOD_CONTROL;
                     _aiTranslateHotkeyKey = VK_T;
+                }
+
+                // 检查是否需要升级旧的的地得变换快捷键设置
+                if ((_deDeDeHotkeyModifiers == MOD_CONTROL && _deDeDeHotkeyKey == VK_D) || // 旧的 Ctrl+D
+                    (_deDeDeHotkeyModifiers == (MOD_CONTROL | MOD_SHIFT) && _deDeDeHotkeyKey == VK_D)) // 旧的 Ctrl+Shift+D
+                {
+                    // 升级为新的默认快捷键 Ctrl+G
+                    _deDeDeHotkeyModifiers = MOD_CONTROL;
+                    _deDeDeHotkeyKey = VK_G;
                 }
 
                 // 创建默认历史文件夹
@@ -1153,6 +1315,11 @@ namespace FlugiClipboard
                 _textSwapHotkeyModifiers = MOD_CONTROL;
                 _textSwapHotkeyKey = VK_Q;
 
+                // 的地得变换默认设置 - 确保在异常情况下也有正确的默认值
+                _deDeDeEnabled = true;
+                _deDeDeHotkeyModifiers = MOD_CONTROL; // 改为 Ctrl+G 避免冲突
+                _deDeDeHotkeyKey = VK_G;
+
                 // 开机启动默认设置
                 _startupEnabled = false;
 
@@ -1168,12 +1335,11 @@ namespace FlugiClipboard
                 if (!Directory.Exists(_historyFolderPath))
                 {
                     Directory.CreateDirectory(_historyFolderPath);
-                    System.Diagnostics.Debug.WriteLine($"创建历史文件夹: {_historyFolderPath}");
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"创建历史文件夹失败: {ex.Message}");
+                // 创建历史文件夹失败，继续运行
             }
         }
 
@@ -1202,7 +1368,6 @@ namespace FlugiClipboard
 
                     if (stream.Length > MAX_IMAGE_FILE_SIZE)
                     {
-                        System.Diagnostics.Debug.WriteLine($"图片文件过大，跳过保存: {stream.Length} bytes");
                         return;
                     }
 
@@ -1325,13 +1490,15 @@ namespace FlugiClipboard
                     // 保存新的AI翻译快捷键（保持兼容性）
                     writer.WriteLine($"AiTranslateHotkeyModifiers={_aiTranslateHotkeyNewModifiers}");
                     writer.WriteLine($"AiTranslateHotkeyKey={_aiTranslateHotkeyNewKey}");
+                    // 保存的地得变换设置
+                    writer.WriteLine($"DeDeDeEnabled={_deDeDeEnabled}");
+                    writer.WriteLine($"DeDeDeHotkeyModifiers={_deDeDeHotkeyModifiers}");
+                    writer.WriteLine($"DeDeDeHotkeyKey={_deDeDeHotkeyKey}");
                 }
-                
-                System.Diagnostics.Debug.WriteLine("设置已保存");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"保存设置失败: {ex.Message}");
+                // 保存设置失败，继续运行
             }
         }
 
@@ -1345,11 +1512,11 @@ namespace FlugiClipboard
                 // 获取屏幕尺寸
                 double screenWidth = SystemParameters.PrimaryScreenWidth;
                 double screenHeight = SystemParameters.PrimaryScreenHeight;
-                
+
                 // 计算窗口在屏幕中间的位置
                 double windowLeft = (screenWidth - Width) / 2;
                 double windowTop = (screenHeight - Height) / 2;
-                
+
                 // 确保窗口在屏幕范围内
                 if (windowLeft < 0) windowLeft = 0;
                 if (windowTop < 0) windowTop = 0;
@@ -1361,43 +1528,16 @@ namespace FlugiClipboard
                 // 先设置窗口位置，再显示窗口
                 Left = windowLeft;
                 Top = windowTop;
-                
-                // 强制设置为置顶 - 确保窗口显示在最前端
+
+                // 设置为置顶，但不抢夺焦点
                 Topmost = true;
-                
-                // 先显示窗口，确保WindowState设置生效
-                Show();
-                
-                // 强制恢复窗口状态为Normal，确保不是最小化状态
-                WindowState = WindowState.Normal;
 
-                // 确保窗口内容可见
+                // 非侵入式显示窗口 - 不抢夺焦点
+                ShowWithoutActivation();
+
+                // 确保窗口状态为Normal
+                WindowState = WindowState.Normal;
                 Visibility = Visibility.Visible;
-                
-                // 强制窗口显示在前台
-                Activate();
-                Focus();
-
-                // 再次确保窗口状态为Normal
-                WindowState = WindowState.Normal;
-
-                // 短暂延迟后再次激活窗口以确保它显示在前台
-                Task.Delay(50).ContinueWith(_ =>
-                {
-                    Dispatcher.Invoke(() =>
-                    {
-                        try
-                        {
-                            // 再次激活窗口
-                            Activate();
-                            Focus();
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"激活窗口时出错: {ex.Message}");
-                        }
-                    });
-                });
 
                 // 短暂延迟后根据置顶按钮状态决定是否取消置顶
                 CheckAndUpdateTopmostState();
@@ -1405,6 +1545,47 @@ namespace FlugiClipboard
             catch
             {
                 // 忽略显示窗口时的错误
+            }
+        }
+
+        /// <summary>
+        /// 显示窗口但不激活（不抢夺焦点）
+        /// </summary>
+        private void ShowWithoutActivation()
+        {
+            try
+            {
+                // 使用 ShowWindow API 以非激活方式显示窗口
+                var hwnd = new WindowInteropHelper(this).Handle;
+                if (hwnd == IntPtr.Zero)
+                {
+                    // 如果窗口句柄不存在，先创建窗口
+                    Show();
+                    hwnd = new WindowInteropHelper(this).Handle;
+                }
+
+                if (hwnd != IntPtr.Zero)
+                {
+                    // SW_SHOWNOACTIVATE = 4: 显示窗口但不激活
+                    ShowWindow(hwnd, 4);
+                }
+                else
+                {
+                    // 备用方案：使用标准Show方法
+                    Show();
+                }
+            }
+            catch
+            {
+                // 备用方案：使用标准Show方法
+                try
+                {
+                    Show();
+                }
+                catch
+                {
+                    // 忽略显示失败
+                }
             }
         }
 
@@ -1463,7 +1644,7 @@ namespace FlugiClipboard
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"打开程序目录失败: {ex.Message}");
+                // 打开程序目录失败
             }
         }
 
@@ -1510,8 +1691,44 @@ namespace FlugiClipboard
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"打开QR码窗口失败: {ex.Message}");
                 MessageBox.Show($"打开QR码窗口时出错: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void NoteButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // 创建记事窗口
+                NoteWindow noteWindow = new NoteWindow(this);
+
+                // 设置记事窗口位置（在主窗口位置附近）
+                noteWindow.Left = Left + (Width - noteWindow.Width) / 2;
+                noteWindow.Top = Top + (Height - noteWindow.Height) / 2;
+
+                // 确保窗口在屏幕范围内
+                if (noteWindow.Left < 0) noteWindow.Left = 0;
+                if (noteWindow.Top < 0) noteWindow.Top = 0;
+                if (noteWindow.Left + noteWindow.Width > SystemParameters.PrimaryScreenWidth)
+                    noteWindow.Left = SystemParameters.PrimaryScreenWidth - noteWindow.Width;
+                if (noteWindow.Top + noteWindow.Height > SystemParameters.PrimaryScreenHeight)
+                    noteWindow.Top = SystemParameters.PrimaryScreenHeight - noteWindow.Height;
+
+                // 直接隐藏主窗口到后台静默状态
+                Hide();
+
+                // 显示记事窗口
+                noteWindow.ShowDialog();
+
+                // 记事窗口关闭后，如果有记录的前台窗口，恢复到那个窗口
+                if (_previousForegroundWindow != IntPtr.Zero)
+                {
+                    SetForegroundWindow(_previousForegroundWindow);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"打开记事窗口时出错: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -1674,6 +1891,10 @@ namespace FlugiClipboard
                 // 传递新的AI翻译快捷键给设置窗口
                 settingsWindow.AiTranslateHotkeyModifiers = _aiTranslateHotkeyNewModifiers;
                 settingsWindow.AiTranslateHotkeyKey = _aiTranslateHotkeyNewKey;
+                // 传递的地得变换设置给设置窗口
+                settingsWindow.DeDeDeEnabled = _deDeDeEnabled;
+                settingsWindow.DeDeDeHotkeyModifiers = _deDeDeHotkeyModifiers;
+                settingsWindow.DeDeDeHotkeyKey = _deDeDeHotkeyKey;
 
                 // 确保界面显示当前设置
                 settingsWindow.LoadSettingsToUI();
@@ -1703,6 +1924,10 @@ namespace FlugiClipboard
                     // 保持旧变量兼容性
                     _aiTranslateHotkeyModifiers = settingsWindow.AiTranslateHotkeyModifiers;
                     _aiTranslateHotkeyKey = settingsWindow.AiTranslateHotkeyKey;
+                    // 应用的地得变换设置
+                    _deDeDeEnabled = settingsWindow.DeDeDeEnabled;
+                    _deDeDeHotkeyModifiers = settingsWindow.DeDeDeHotkeyModifiers;
+                    _deDeDeHotkeyKey = settingsWindow.DeDeDeHotkeyKey;
 
                     // 确保至少有一个选项被选中
                     if (!_singleClickPaste && !_doubleClickPaste)
@@ -1732,7 +1957,7 @@ namespace FlugiClipboard
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"设置开机启动失败: {ex.Message}");
+                        // 设置开机启动失败
                     }
 
                     // 更新智能文字交换设置
@@ -1745,7 +1970,7 @@ namespace FlugiClipboard
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"重新注册智能文字交换快捷键失败: {ex.Message}");
+                        // 重新注册智能文字交换快捷键失败
                     }
 
                     // 重新注册AI翻译快捷键（新实现）
@@ -1755,7 +1980,17 @@ namespace FlugiClipboard
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"重新注册AI翻译快捷键失败: {ex.Message}");
+                        // 重新注册AI翻译快捷键失败
+                    }
+
+                    // 重新注册的地得变换快捷键
+                    try
+                    {
+                        UpdateDeDeDeHotkey(settingsWindow.DeDeDeHotkeyModifiers, settingsWindow.DeDeDeHotkeyKey);
+                    }
+                    catch (Exception ex)
+                    {
+                        // 重新注册的地得变换快捷键失败
                     }
 
                     // 保存设置到配置文件
@@ -1924,22 +2159,34 @@ namespace FlugiClipboard
 
                         if (item.IsImage && item.Image != null)
                         {
+                            // 标记为内部剪贴板操作
+                            _isInternalClipboardOperation = true;
+
                             // 复制图片到剪贴板
                             System.Windows.Clipboard.SetImage(item.Image);
 
                             // 隐藏剪贴板窗口
                             Hide();
 
-                            // 短暂延迟后粘贴
-                            Task.Delay(100).ContinueWith(_ =>
+                            // 延迟重置标记，确保剪贴板监听器忽略此次操作
+                            Task.Delay(300).ContinueWith(_ =>
+                            {
+                                Dispatcher.Invoke(() => _isInternalClipboardOperation = false);
+                            });
+
+                            // 短暂延迟后粘贴，确保目标窗口能够接收焦点
+                            Task.Delay(150).ContinueWith(_ =>
                             {
                                 Dispatcher.Invoke(() =>
                                 {
-                                    // 恢复到原来的前台窗口
-                                    SetForegroundWindow(targetWindow);
+                                    // 恢复到原来的前台窗口，确保焦点正确恢复
+                                    if (targetWindow != IntPtr.Zero)
+                                    {
+                                        SetForegroundWindow(targetWindow);
+                                    }
 
-                                    // 再次短暂延迟确保窗口切换完成
-                                    Task.Delay(50).ContinueWith(__ =>
+                                    // 增加延迟确保窗口切换完成和焦点恢复
+                                    Task.Delay(100).ContinueWith(__ =>
                                     {
                                         Dispatcher.Invoke(() =>
                                         {
@@ -1955,22 +2202,34 @@ namespace FlugiClipboard
                         }
                         else if (!string.IsNullOrEmpty(item.Text))
                         {
+                            // 标记为内部剪贴板操作
+                            _isInternalClipboardOperation = true;
+
                             // 复制文本到剪贴板
                             System.Windows.Clipboard.SetText(item.Text);
 
                             // 隐藏剪贴板窗口
                             Hide();
 
-                            // 短暂延迟后粘贴
-                            Task.Delay(100).ContinueWith(_ =>
+                            // 延迟重置标记，确保剪贴板监听器忽略此次操作
+                            Task.Delay(300).ContinueWith(_ =>
+                            {
+                                Dispatcher.Invoke(() => _isInternalClipboardOperation = false);
+                            });
+
+                            // 短暂延迟后粘贴，确保目标窗口能够接收焦点
+                            Task.Delay(150).ContinueWith(_ =>
                             {
                                 Dispatcher.Invoke(() =>
                                 {
-                                    // 恢复到原来的前台窗口
-                                    SetForegroundWindow(targetWindow);
+                                    // 恢复到原来的前台窗口，确保焦点正确恢复
+                                    if (targetWindow != IntPtr.Zero)
+                                    {
+                                        SetForegroundWindow(targetWindow);
+                                    }
 
-                                    // 再次短暂延迟确保窗口切换完成
-                                    Task.Delay(50).ContinueWith(__ =>
+                                    // 增加延迟确保窗口切换完成和焦点恢复
+                                    Task.Delay(100).ContinueWith(__ =>
                                     {
                                         Dispatcher.Invoke(() =>
                                         {
@@ -1987,7 +2246,7 @@ namespace FlugiClipboard
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"粘贴失败: {ex.Message}");
+                        // 粘贴失败
                     }
                 }
             }
@@ -2124,16 +2383,14 @@ namespace FlugiClipboard
                 // 如果获取到的文本与原剪贴板内容相同，说明没有选中文本
                 if (hasOriginalContent && selectedText == originalClipboard)
                 {
-                    System.Diagnostics.Debug.WriteLine("没有检测到新的选中文本");
                     return "";
                 }
 
-                System.Diagnostics.Debug.WriteLine($"获取到选中文本: {selectedText}");
                 return selectedText;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"获取选中文本失败: {ex.Message}");
+                // 获取选中文本失败
             }
             return "";
         }
@@ -2156,7 +2413,7 @@ namespace FlugiClipboard
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"替换选中文本失败: {ex.Message}");
+                // 替换选中文本失败
             }
         }
 
@@ -2438,17 +2695,8 @@ namespace FlugiClipboard
                 }
                 else if (meaningfulSegments.Count > 2)
                 {
-                    // 如果有多个词，交换前两个
-                    var result = new List<string>(segments);
-                    int firstIndex = segments.IndexOf(meaningfulSegments[0]);
-                    int secondIndex = segments.IndexOf(meaningfulSegments[1]);
-
-                    if (firstIndex >= 0 && secondIndex >= 0)
-                    {
-                        result[firstIndex] = meaningfulSegments[1];
-                        result[secondIndex] = meaningfulSegments[0];
-                        return string.Join("", result);
-                    }
+                    // 智能交换逻辑：根据文本长度和词块分布决定交换策略
+                    return PerformIntelligentSegmentSwap(text, meaningfulSegments);
                 }
             }
             catch
@@ -2457,6 +2705,709 @@ namespace FlugiClipboard
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// 执行智能词块交换
+        /// </summary>
+        private string? PerformIntelligentSegmentSwap(string originalText, List<string> meaningfulSegments)
+        {
+            try
+            {
+                int textLength = originalText.Length;
+                int segmentCount = meaningfulSegments.Count;
+
+                // 对于5个字的情况，特殊处理
+                if (textLength == 5 && segmentCount >= 2)
+                {
+                    // 计算前半部分和后半部分的字符数
+                    int totalChars = meaningfulSegments.Sum(s => s.Length);
+                    if (totalChars == textLength) // 确保没有遗漏字符
+                    {
+                        // 尝试2+3的分割方式
+                        var result = TrySwapByCharacterCount(meaningfulSegments, 2, 3);
+                        if (result != null) return result;
+
+                        // 如果2+3不行，尝试其他分割方式
+                        result = TrySwapByCharacterCount(meaningfulSegments, 1, 4);
+                        if (result != null) return result;
+                    }
+                }
+
+                // 对于4个字的情况
+                if (textLength == 4 && segmentCount >= 2)
+                {
+                    int totalChars = meaningfulSegments.Sum(s => s.Length);
+                    if (totalChars == textLength)
+                    {
+                        // 尝试2+2的分割方式
+                        var result = TrySwapByCharacterCount(meaningfulSegments, 2, 2);
+                        if (result != null) return result;
+                    }
+                }
+
+                // 对于6个字的情况
+                if (textLength == 6 && segmentCount >= 2)
+                {
+                    int totalChars = meaningfulSegments.Sum(s => s.Length);
+                    if (totalChars == textLength)
+                    {
+                        // 尝试3+3的分割方式
+                        var result = TrySwapByCharacterCount(meaningfulSegments, 3, 3);
+                        if (result != null) return result;
+                    }
+                }
+
+                // 默认情况：如果有多个词块，尝试按词块数量平分
+                if (segmentCount >= 2)
+                {
+                    int halfCount = segmentCount / 2;
+                    var firstHalf = meaningfulSegments.Take(halfCount);
+                    var secondHalf = meaningfulSegments.Skip(halfCount);
+
+                    return string.Join("", secondHalf) + string.Join("", firstHalf);
+                }
+
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 尝试按字符数分割并交换
+        /// </summary>
+        private string? TrySwapByCharacterCount(List<string> segments, int firstPartChars, int secondPartChars)
+        {
+            try
+            {
+                var firstPart = new List<string>();
+                var secondPart = new List<string>();
+                int currentChars = 0;
+                bool inFirstPart = true;
+
+                foreach (var segment in segments)
+                {
+                    if (inFirstPart)
+                    {
+                        if (currentChars + segment.Length <= firstPartChars)
+                        {
+                            firstPart.Add(segment);
+                            currentChars += segment.Length;
+
+                            if (currentChars == firstPartChars)
+                            {
+                                inFirstPart = false;
+                                currentChars = 0;
+                            }
+                        }
+                        else
+                        {
+                            // 如果当前词块会超出第一部分的字符限制，则放入第二部分
+                            secondPart.Add(segment);
+                            inFirstPart = false;
+                        }
+                    }
+                    else
+                    {
+                        secondPart.Add(segment);
+                    }
+                }
+
+                // 验证分割是否正确
+                int firstPartLength = firstPart.Sum(s => s.Length);
+                int secondPartLength = secondPart.Sum(s => s.Length);
+
+                if (firstPartLength == firstPartChars && secondPartLength == secondPartChars)
+                {
+                    // 交换两部分
+                    return string.Join("", secondPart) + string.Join("", firstPart);
+                }
+
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // 的地得变换功能实现
+        private async void PerformDeDeDeTransform()
+        {
+            if (_isPerformingDeDeDe)
+            {
+                return;
+            }
+
+            _isPerformingDeDeDe = true;
+
+            try
+            {
+                // 记录窗口是否可见
+                bool wasVisible = IsVisible;
+
+                // 获取选中文本
+                string selectedText = await GetSelectedTextDirectly();
+
+                if (!string.IsNullOrEmpty(selectedText))
+                {
+                    // 执行的地得变换
+                    string transformedText = TransformDeDeDe(selectedText);
+
+                    if (transformedText != selectedText)
+                    {
+                        // 直接通过键盘输入替换选中文本，完全不使用剪贴板
+                        try
+                        {
+                            // 直接输入变换后的文本，这会自动替换当前选中的文本
+                            TypeTextDirectly(transformedText);
+                        }
+                        catch (Exception ex)
+                        {
+                            return;
+                        }
+                    }
+                }
+
+                // 确保窗口状态没有被意外改变
+                if (!wasVisible && IsVisible)
+                {
+                    Hide();
+                }
+            }
+            catch (Exception ex)
+            {
+                // 的地得变换异常
+            }
+            finally
+            {
+                _isPerformingDeDeDe = false;
+            }
+        }
+
+        /// <summary>
+        /// 执行的地得智能变换
+        /// </summary>
+        private string TransformDeDeDe(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return text;
+
+            // 检查文本中是否包含的、地、得
+            if (!text.Contains("的") && !text.Contains("地") && !text.Contains("得"))
+                return text;
+
+            try
+            {
+                return PerformIntelligentDeDeDeTransform(text);
+            }
+            catch
+            {
+                return text;
+            }
+        }
+
+
+
+        /// <summary>
+        /// 执行智能的地得变换 - 优化版本，确保处理所有"的地得"字符
+        /// </summary>
+        private string PerformIntelligentDeDeDeTransform(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return text;
+            }
+
+            // 先收集所有需要变换的位置和对应的正确字符
+            var transformations = new List<(int position, char correctChar)>();
+
+            // 遍历文本，找到的地得并进行智能分析
+            for (int i = 0; i < text.Length; i++)
+            {
+                char currentChar = text[i];
+
+                if (currentChar == '的' || currentChar == '地' || currentChar == '得')
+                {
+                    // 根据上下文智能选择正确的字
+                    char correctChar = GetCorrectDeDeDeByContext(text, i);
+
+                    // 只有当需要变换时才记录
+                    if (correctChar != currentChar)
+                    {
+                        transformations.Add((i, correctChar));
+                    }
+                }
+            }
+
+            // 如果没有需要变换的，直接返回原文本
+            if (transformations.Count == 0)
+            {
+                return text;
+            }
+
+            // 应用所有变换
+            var result = new StringBuilder(text);
+            foreach (var (position, correctChar) in transformations)
+            {
+                result[position] = correctChar;
+            }
+
+            return result.ToString();
+        }
+
+        /// <summary>
+        /// 根据上下文智能选择正确的"的地得"
+        /// </summary>
+        private char GetCorrectDeDeDeByContext(string text, int position)
+        {
+            try
+            {
+                // 获取前后文字符
+                char prevChar = position > 0 ? text[position - 1] : '\0';
+                char nextChar = position < text.Length - 1 ? text[position + 1] : '\0';
+
+                // 获取前面的词和后面的词
+                string beforeWord = GetWordBefore(text, position);
+                string afterWord = GetWordAfter(text, position);
+
+                // 智能判断规则
+
+                // 1. "得" 的使用场景：动词 + 得 + 形容词/副词（表示程度、结果）
+                if (IsVerbWord(beforeWord) && (IsAdjectiveWord(afterWord) || IsAdverbWord(afterWord)))
+                {
+                    return '得';
+                }
+
+                // 2. "地" 的使用场景：形容词/副词 + 地 + 动词（表示方式、状态）
+                if ((IsAdjectiveWord(beforeWord) || IsAdverbWord(beforeWord)) && IsVerbWord(afterWord))
+                {
+                    return '地';
+                }
+
+                // 3. "的" 的使用场景：名词/代词 + 的 + 名词（表示所属、修饰）
+                if ((IsNounWord(beforeWord) || IsPronounWord(beforeWord)) && IsNounWord(afterWord))
+                {
+                    return '的';
+                }
+
+                // 4. 特殊规则：如果前面是颜色、大小等形容词，后面是名词，用"的"
+                if (IsDescriptiveAdjective(beforeWord) && IsNounWord(afterWord))
+                {
+                    return '的';
+                }
+
+                // 5. 默认规则：根据常见搭配
+                return GetDefaultByCommonUsage(beforeWord, afterWord);
+            }
+            catch (Exception ex)
+            {
+                return text[position]; // 保持原字符
+            }
+        }
+
+        /// <summary>
+        /// 获取指定位置前面的词 - 改进版本，更好地处理中文字符
+        /// </summary>
+        private string GetWordBefore(string text, int position)
+        {
+            if (position <= 0) return "";
+
+            int start = position - 1;
+            // 改进：使用更准确的中文字符判断
+            while (start >= 0 && IsChineseCharacter(text[start]))
+            {
+                start--;
+            }
+            start++;
+
+            return text.Substring(start, position - start);
+        }
+
+        /// <summary>
+        /// 获取指定位置后面的词 - 改进版本，更好地处理中文字符
+        /// </summary>
+        private string GetWordAfter(string text, int position)
+        {
+            if (position >= text.Length - 1) return "";
+
+            int start = position + 1;
+            int end = start;
+            // 改进：使用更准确的中文字符判断
+            while (end < text.Length && IsChineseCharacter(text[end]))
+            {
+                end++;
+            }
+
+            return text.Substring(start, end - start);
+        }
+
+        /// <summary>
+        /// 判断是否为中文字符（包括汉字、字母、数字）
+        /// </summary>
+        private bool IsChineseCharacter(char c)
+        {
+            // 汉字Unicode范围：\u4e00-\u9fff
+            // 也包括字母和数字
+            return (c >= '\u4e00' && c <= '\u9fff') || char.IsLetter(c) || char.IsDigit(c);
+        }
+
+        /// <summary>
+        /// 判断是否为动词
+        /// </summary>
+        private bool IsVerbWord(string word)
+        {
+            if (string.IsNullOrEmpty(word)) return false;
+
+            // 常见动词列表
+            var verbs = new HashSet<string>
+            {
+                "跑", "走", "说", "写", "看", "听", "做", "吃", "喝", "睡",
+                "学", "教", "读", "唱", "跳", "飞", "游", "开", "关", "买",
+                "卖", "来", "去", "回", "出", "进", "上", "下", "起", "坐",
+                "站", "躺", "笑", "哭", "想", "爱", "恨", "喜欢", "讨厌", "工作",
+                "学习", "休息", "玩", "打", "踢", "扔", "拿", "放", "给", "送",
+                "收", "找", "丢", "忘", "记", "知道", "认识", "理解", "明白", "相信"
+            };
+
+            return verbs.Contains(word);
+        }
+
+        /// <summary>
+        /// 判断是否为形容词
+        /// </summary>
+        private bool IsAdjectiveWord(string word)
+        {
+            if (string.IsNullOrEmpty(word)) return false;
+
+            // 常见形容词列表
+            var adjectives = new HashSet<string>
+            {
+                "好", "坏", "大", "小", "高", "低", "长", "短", "快", "慢",
+                "美", "丑", "新", "旧", "热", "冷", "干", "湿", "亮", "暗",
+                "红", "绿", "蓝", "黄", "黑", "白", "粉", "紫", "灰", "棕",
+                "聪明", "愚蠢", "勇敢", "胆小", "善良", "邪恶", "诚实", "虚伪",
+                "漂亮", "难看", "年轻", "年老", "健康", "生病", "富有", "贫穷",
+                "安全", "危险", "简单", "复杂", "容易", "困难", "重要", "普通",
+                "特别", "一般", "完美", "糟糕", "正确", "错误", "真实", "虚假"
+            };
+
+            return adjectives.Contains(word);
+        }
+
+        /// <summary>
+        /// 判断是否为副词
+        /// </summary>
+        private bool IsAdverbWord(string word)
+        {
+            if (string.IsNullOrEmpty(word)) return false;
+
+            // 常见副词列表
+            var adverbs = new HashSet<string>
+            {
+                "很", "非常", "特别", "十分", "极其", "相当", "比较", "稍微",
+                "快速", "缓慢", "仔细", "认真", "努力", "用力", "轻松", "紧张",
+                "安静", "大声", "小声", "清楚", "模糊", "准确", "精确", "大概",
+                "立刻", "马上", "突然", "慢慢", "渐渐", "逐渐", "经常", "偶尔",
+                "总是", "从不", "有时", "刚刚", "正在", "将要", "已经", "还没",
+                "刚才", "现在", "以后", "以前", "今天", "昨天", "明天", "最近"
+            };
+
+            return adverbs.Contains(word);
+        }
+
+        /// <summary>
+        /// 判断是否为名词
+        /// </summary>
+        private bool IsNounWord(string word)
+        {
+            if (string.IsNullOrEmpty(word)) return false;
+
+            // 常见名词列表
+            var nouns = new HashSet<string>
+            {
+                "书", "笔", "纸", "桌", "椅", "门", "窗", "房", "车", "路",
+                "人", "男人", "女人", "孩子", "学生", "老师", "医生", "工人",
+                "朋友", "家人", "父母", "爸爸", "妈妈", "哥哥", "姐姐", "弟弟", "妹妹",
+                "学校", "医院", "公司", "商店", "银行", "图书馆", "公园", "电影院",
+                "手机", "电脑", "电视", "冰箱", "洗衣机", "空调", "汽车", "自行车",
+                "苹果", "香蕉", "橙子", "葡萄", "西瓜", "草莓", "蔬菜", "肉", "鱼",
+                "衣服", "裤子", "鞋子", "帽子", "包", "眼镜", "手表", "项链",
+                "时间", "地点", "方法", "原因", "结果", "问题", "答案", "机会"
+            };
+
+            return nouns.Contains(word);
+        }
+
+        /// <summary>
+        /// 判断是否为代词
+        /// </summary>
+        private bool IsPronounWord(string word)
+        {
+            if (string.IsNullOrEmpty(word)) return false;
+
+            // 常见代词列表
+            var pronouns = new HashSet<string>
+            {
+                "我", "你", "他", "她", "它", "我们", "你们", "他们", "她们", "它们",
+                "这", "那", "这个", "那个", "这些", "那些", "这里", "那里",
+                "什么", "谁", "哪", "哪个", "哪些", "怎么", "为什么", "什么时候",
+                "自己", "别人", "大家", "人家", "咱们"
+            };
+
+            return pronouns.Contains(word);
+        }
+
+        /// <summary>
+        /// 判断是否为描述性形容词（颜色、大小、形状等）
+        /// </summary>
+        private bool IsDescriptiveAdjective(string word)
+        {
+            if (string.IsNullOrEmpty(word)) return false;
+
+            // 描述性形容词列表
+            var descriptiveAdj = new HashSet<string>
+            {
+                // 颜色
+                "红", "绿", "蓝", "黄", "黑", "白", "粉", "紫", "灰", "棕", "橙",
+                "红色", "绿色", "蓝色", "黄色", "黑色", "白色", "粉色", "紫色", "灰色", "棕色", "橙色",
+
+                // 大小
+                "大", "小", "巨大", "微小", "庞大", "细小", "宽", "窄", "厚", "薄",
+
+                // 形状
+                "圆", "方", "长", "短", "直", "弯", "尖", "钝", "平", "凸", "凹",
+
+                // 材质
+                "木", "铁", "金", "银", "塑料", "玻璃", "纸", "布", "皮", "石头"
+            };
+
+            return descriptiveAdj.Contains(word);
+        }
+
+        /// <summary>
+        /// 根据常见搭配返回默认的"的地得"
+        /// </summary>
+        private char GetDefaultByCommonUsage(string beforeWord, string afterWord)
+        {
+            // 常见的"的"字搭配
+            var dePatterns = new Dictionary<string, HashSet<string>>
+            {
+                { "我", new HashSet<string> { "书", "家", "朋友", "老师", "爸爸", "妈妈", "手机", "电脑" } },
+                { "你", new HashSet<string> { "书", "家", "朋友", "老师", "爸爸", "妈妈", "手机", "电脑" } },
+                { "他", new HashSet<string> { "书", "家", "朋友", "老师", "爸爸", "妈妈", "手机", "电脑" } },
+                { "红色", new HashSet<string> { "苹果", "花", "车", "衣服", "包" } },
+                { "大", new HashSet<string> { "房子", "车", "树", "狗", "苹果" } },
+                { "小", new HashSet<string> { "房子", "车", "树", "狗", "苹果" } }
+            };
+
+            // 常见的"地"字搭配
+            var diPatterns = new Dictionary<string, HashSet<string>>
+            {
+                { "快速", new HashSet<string> { "跑", "走", "移动", "前进" } },
+                { "仔细", new HashSet<string> { "看", "听", "检查", "观察" } },
+                { "认真", new HashSet<string> { "学习", "工作", "思考", "做" } },
+                { "安静", new HashSet<string> { "坐", "站", "等", "听" } }
+            };
+
+            // 常见的"得"字搭配
+            var dePatterns2 = new Dictionary<string, HashSet<string>>
+            {
+                { "跑", new HashSet<string> { "快", "慢", "好", "累", "很" } },
+                { "写", new HashSet<string> { "好", "差", "快", "慢", "清楚" } },
+                { "说", new HashSet<string> { "好", "清楚", "流利", "大声" } },
+                { "做", new HashSet<string> { "好", "差", "快", "慢", "认真" } }
+            };
+
+            // 检查"的"字搭配
+            if (dePatterns.ContainsKey(beforeWord) && dePatterns[beforeWord].Contains(afterWord))
+            {
+                return '的';
+            }
+
+            // 检查"地"字搭配
+            if (diPatterns.ContainsKey(beforeWord) && diPatterns[beforeWord].Contains(afterWord))
+            {
+                return '地';
+            }
+
+            // 检查"得"字搭配
+            if (dePatterns2.ContainsKey(beforeWord) && dePatterns2[beforeWord].Contains(afterWord))
+            {
+                return '得';
+            }
+
+            // 默认返回"的"
+            return '的';
+        }
+
+        /// <summary>
+        /// 新的的地得变换方法 - 不使用剪贴板，直接键盘输入替换
+        /// </summary>
+        private async Task<string> GetSelectedTextDirectly()
+        {
+            try
+            {
+                // 保存原剪贴板内容
+                string originalClipboard = "";
+                bool hasOriginalContent = false;
+
+                try
+                {
+                    if (System.Windows.Clipboard.ContainsText())
+                    {
+                        originalClipboard = System.Windows.Clipboard.GetText();
+                        hasOriginalContent = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    hasOriginalContent = false;
+                }
+
+                // 清空剪贴板，确保能检测到新的复制内容
+                try
+                {
+                    System.Windows.Clipboard.Clear();
+                    await Task.Delay(50); // 等待清空完成
+                }
+                catch (Exception ex)
+                {
+                    // 清空剪贴板失败
+                }
+
+                // 发送Ctrl+C获取选中文本
+                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+                keybd_event((byte)VK_C, 0, 0, UIntPtr.Zero);
+                await Task.Delay(50);
+                keybd_event((byte)VK_C, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+
+                // 等待复制完成
+                await Task.Delay(300);
+
+                string selectedText = "";
+                // 获取剪贴板内容
+                try
+                {
+                    if (System.Windows.Clipboard.ContainsText())
+                    {
+                        selectedText = System.Windows.Clipboard.GetText().Trim();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 读取剪贴板内容失败
+                }
+
+                // 立即恢复原剪贴板内容
+                try
+                {
+                    if (hasOriginalContent && !string.IsNullOrEmpty(originalClipboard))
+                    {
+                        System.Windows.Clipboard.SetText(originalClipboard);
+                    }
+                    else
+                    {
+                        System.Windows.Clipboard.Clear();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    try { System.Windows.Clipboard.Clear(); } catch { }
+                }
+
+                return selectedText;
+            }
+            catch (Exception ex)
+            {
+                return "";
+            }
+        }
+
+        /// <summary>
+        /// 直接通过键盘输入替换选中文本，不使用剪贴板
+        /// </summary>
+        private void TypeTextDirectly(string text)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(text))
+                {
+                    return;
+                }
+
+                // 创建输入数组
+                List<INPUT> inputs = new List<INPUT>();
+
+                foreach (char c in text)
+                {
+                    // 按下字符
+                    INPUT inputDown = new INPUT
+                    {
+                        type = INPUT_KEYBOARD,
+                        union = new INPUTUNION
+                        {
+                            ki = new KEYBDINPUT
+                            {
+                                wVk = 0,
+                                wScan = c,
+                                dwFlags = KEYEVENTF_UNICODE,
+                                time = 0,
+                                dwExtraInfo = UIntPtr.Zero
+                            }
+                        }
+                    };
+                    inputs.Add(inputDown);
+                }
+
+                // 发送所有输入
+                if (inputs.Count > 0)
+                {
+                    SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf(typeof(INPUT)));
+                }
+            }
+            catch (Exception ex)
+            {
+                // 直接输入文本失败
+            }
+        }
+
+        private void UpdateDeDeDeHotkey(uint modifiers, uint key)
+        {
+            try
+            {
+                // 先注销旧的快捷键
+                if (_hwndSource?.Handle != IntPtr.Zero)
+                {
+                    UnregisterHotKey(_hwndSource.Handle, DEDEDE_HOTKEY_ID);
+                }
+
+                // 更新快捷键变量
+                _deDeDeHotkeyModifiers = modifiers;
+                _deDeDeHotkeyKey = key;
+
+                // 注册新的快捷键
+                if (_deDeDeEnabled && modifiers != 0 && key != 0 && _hwndSource?.Handle != IntPtr.Zero)
+                {
+                    // 检查是否与其他热键冲突
+                    bool isConflictWithClipboard = (_hotkeyModifiers == modifiers && _hotkeyKey == key);
+                    bool isConflictWithTextSwap = (_textSwapHotkeyModifiers == modifiers && _textSwapHotkeyKey == key);
+                    bool isConflictWithAiTranslate = (_aiTranslateHotkeyNewModifiers == modifiers && _aiTranslateHotkeyNewKey == key);
+
+                    if (!isConflictWithClipboard && !isConflictWithTextSwap && !isConflictWithAiTranslate)
+                    {
+                        TryRegisterHotkey(_hwndSource.Handle, DEDEDE_HOTKEY_ID, modifiers, key, "的地得变换");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // 更新的地得变换快捷键失败
+            }
         }
 
         /// <summary>
@@ -2487,19 +3438,23 @@ namespace FlugiClipboard
 
                 // 测试其他标点符号
                 { "开始！结束", "结束！开始" },
-                { "问题？答案", "答案？问题" }
+                { "问题？答案", "答案？问题" },
+
+                // 测试5个字的智能交换（2+3模式）
+                { "呼出快捷键", "快捷键呼出" },
+                { "打开新窗口", "新窗口打开" },
+                { "保存文件夹", "文件夹保存" },
+
+                // 测试4个字的交换（2+2模式）
+                { "文件管理", "管理文件" },
+                { "系统设置", "设置系统" },
+
+                // 测试6个字的交换（3+3模式）
+                { "智能文字交换", "文字交换智能" },
+                { "剪贴板历史记录", "历史记录剪贴板" }
             };
 
-            // 测试智能文字交换功能（仅在调试模式下运行）
-            #if DEBUG
-            foreach (var testCase in testCases)
-            {
-                string input = testCase.Key;
-                string expected = testCase.Value;
-                string actual = SwapText(input);
-                // 测试结果可在调试器中查看
-            }
-            #endif
+
         }
 
         private string GetSettingsFilePath()
@@ -2781,8 +3736,6 @@ namespace FlugiClipboard
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine("开始获取选中文本用于AI翻译");
-
                 // 保存当前剪贴板内容
                 string originalClipboard = "";
                 bool hasOriginalContent = false;
@@ -2798,16 +3751,13 @@ namespace FlugiClipboard
                         // 如果剪贴板中已有非空文本，直接使用它，避免不必要的Ctrl+C操作
                         if (!string.IsNullOrWhiteSpace(originalClipboard))
                         {
-                            System.Diagnostics.Debug.WriteLine($"剪贴板中已有文本内容，直接使用: {originalClipboard[..Math.Min(50, originalClipboard.Length)]}...");
                             return originalClipboard.Trim();
                         }
-                        
-                        System.Diagnostics.Debug.WriteLine($"保存原剪贴板内容：{originalClipboard[..Math.Min(50, originalClipboard.Length)]}...");
                     }
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"保存原剪贴板内容失败：{ex.Message}");
+                    // 保存原剪贴板内容失败
                 }
 
                 // 清空剪贴板以确保能检测到新内容
@@ -2818,11 +3768,10 @@ namespace FlugiClipboard
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"清空剪贴板失败：{ex.Message}");
+                    // 清空剪贴板失败
                 }
 
                 // 模拟 Ctrl+C 复制选中文本
-                System.Diagnostics.Debug.WriteLine("发送 Ctrl+C 复制命令");
                 keybd_event((byte)VK_CONTROL, 0, 0, UIntPtr.Zero);
                 keybd_event(0x43, 0, 0, UIntPtr.Zero); // C键
                 System.Threading.Thread.Sleep(50); // 确保按键被系统捕获
@@ -2844,7 +3793,6 @@ namespace FlugiClipboard
                             selectedText = System.Windows.Clipboard.GetText();
                             if (!string.IsNullOrWhiteSpace(selectedText))
                             {
-                                System.Diagnostics.Debug.WriteLine($"获取到剪贴板内容：{selectedText[..Math.Min(50, selectedText.Length)]}...");
                                 break;
                             }
                         }
@@ -2853,19 +3801,15 @@ namespace FlugiClipboard
                     
                     if (string.IsNullOrWhiteSpace(selectedText))
                     {
-                        System.Diagnostics.Debug.WriteLine("剪贴板中没有文本内容");
-                        
                         // 如果无法获取新的选中文本，但原剪贴板有内容，则尝试使用原内容
                         if (hasOriginalContent && !string.IsNullOrWhiteSpace(originalClipboard))
                         {
-                            System.Diagnostics.Debug.WriteLine("尝试使用原剪贴板内容作为选中文本");
                             return originalClipboard.Trim();
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"获取剪贴板内容失败：{ex.Message}");
                     // 如果获取失败但原剪贴板有内容，尝试使用原内容
                     if (hasOriginalContent && !string.IsNullOrWhiteSpace(originalClipboard))
                     {
@@ -2877,7 +3821,6 @@ namespace FlugiClipboard
                 // 检查是否获取到文本
                 if (string.IsNullOrWhiteSpace(selectedText))
                 {
-                    System.Diagnostics.Debug.WriteLine("没有获取到选中文本");
                     // 恢复原剪贴板内容
                     if (hasOriginalContent && !string.IsNullOrEmpty(originalClipboard))
                     {
@@ -2898,21 +3841,18 @@ namespace FlugiClipboard
                         try
                         {
                             System.Windows.Clipboard.SetText(originalClipboard);
-                            System.Diagnostics.Debug.WriteLine("已恢复原剪贴板内容");
                         }
                         catch (Exception ex)
                         {
-                            System.Diagnostics.Debug.WriteLine($"恢复原剪贴板内容失败：{ex.Message}");
+                            // 恢复原剪贴板内容失败
                         }
                     });
                 }
 
-                System.Diagnostics.Debug.WriteLine($"成功获取选中文本：{selectedText.Trim()}");
                 return selectedText.Trim();
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"获取选中文本失败：{ex.Message}");
                 return "";
             }
         }
@@ -3306,8 +4246,18 @@ namespace FlugiClipboard
                             {
                                 try
                                 {
+                                    // 标记为内部剪贴板操作
+                                    _isInternalClipboardOperation = true;
+
                                     Clipboard.SetText(translatedTextBox.Text);
                                     copyButton.Content = "已复制";
+
+                                    // 延迟重置标记
+                                    Task.Delay(300).ContinueWith(_ =>
+                                    {
+                                        Dispatcher.Invoke(() => _isInternalClipboardOperation = false);
+                                    });
+
                                     Task.Delay(1500).ContinueWith(_ =>
                                     {
                                         Dispatcher.Invoke(() => copyButton.Content = "复制译文");
@@ -3315,6 +4265,7 @@ namespace FlugiClipboard
                                 }
                                 catch (Exception ex)
                                 {
+                                    _isInternalClipboardOperation = false; // 确保在异常时重置标记
                                     MessageBox.Show($"复制失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                                 }
                             };
